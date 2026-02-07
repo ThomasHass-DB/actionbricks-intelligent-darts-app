@@ -1,0 +1,1 @@
+command: ["uvicorn", "intelligent_darts.backend.app:app", "--workers", "2"]
