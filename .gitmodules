@@ -1,0 +1,4 @@
+[submodule "streaming"]
+	path = streaming
+	url = https://github.com/ThomasHass-DB/push-kinesis-videostream.git
+	branch = actionbricks-config

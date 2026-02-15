@@ -16,6 +16,7 @@ A full-stack intelligent dart scoring application that uses computer vision and 
 - **Frontend:** React 19 / TypeScript / [shadcn/ui](https://ui.shadcn.com/) / [TanStack Router](https://tanstack.com/router)
 - **ML:** [Ultralytics YOLO](https://docs.ultralytics.com/) for dart detection
 - **Video:** AWS Kinesis Video Streams WebRTC for live camera feeds
+- **Streaming:** [KVS WebRTC SDK (C)](streaming/) running on Raspberry Pi 5 with 3 USB cameras
 - **Deployment:** [Databricks Apps](https://docs.databricks.com/en/apps/index.html) via Databricks Asset Bundles
 - **API Client:** Auto-generated TypeScript client from OpenAPI schema
 
@@ -27,13 +28,14 @@ A full-stack intelligent dart scoring application that uses computer vision and 
 - **Databricks workspace** with:
   - A service credential configured for AWS Kinesis Video Streams access (default name: `actionbricks_video_access_1`)
   - AWS Kinesis Video Streams signaling channels set up for your cameras
+- **Raspberry Pi 5** (or laptop for testing) with 3 USB cameras for live video streaming (see [Camera Streaming Setup](#camera-streaming-setup))
 
 ## Getting Started
 
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/ThomasHass-DB/actionbricks-intelligent-darts-app.git
+git clone --recursive https://github.com/ThomasHass-DB/actionbricks-intelligent-darts-app.git
 cd actionbricks-intelligent-darts-app
 
 # Install Python dependencies
@@ -42,6 +44,8 @@ uv sync
 # Install JavaScript dependencies
 uv run apx bun install
 ```
+
+> **Note:** The `--recursive` flag clones the `streaming/` submodule (KVS WebRTC SDK) along with the main repo. If you already cloned without it, run `git submodule update --init` to fetch it.
 
 ### 2. Configure environment
 
@@ -103,6 +107,96 @@ uv run yolo detect train data=dataset/data.yaml model=yolov8n.pt epochs=100 imgs
 cp runs/detect/train/weights/best.pt .
 ```
 
+## Camera Streaming Setup
+
+The application receives live video from 3 USB cameras via AWS Kinesis Video Streams (WebRTC). The streaming component lives in the [`streaming/`](streaming/) directory (a git submodule of the [KVS WebRTC SDK for C](https://github.com/awslabs/amazon-kinesis-video-streams-webrtc-sdk-c), customized for this project).
+
+Each camera publishes to its own KVS signaling channel:
+
+| Camera | Signaling Channel |
+|--------|-------------------|
+| USB Camera 0 | `actionbricks_demo_darts_camera_1` |
+| USB Camera 1 | `actionbricks_demo_darts_camera_2` |
+| USB Camera 2 | `actionbricks_demo_darts_camera_3` |
+
+### Architecture
+
+```
+USB Camera 1 ──┐
+USB Camera 2 ──┼── Raspberry Pi 5 ── KVS WebRTC ──► AWS Kinesis ──► Databricks App (viewer)
+USB Camera 3 ──┘
+```
+
+### Raspberry Pi 5 Setup (Production)
+
+1. **Install OS:** Flash [Raspberry Pi OS Bookworm 64-bit](https://www.raspberrypi.com/software/) to an SD card and boot the Pi.
+
+2. **Copy the repo** to the Pi (from your laptop):
+
+   ```bash
+   rsync -avz --progress \
+     --exclude 'build/' --exclude 'open-source/' --exclude '.git/' \
+     streaming/ <PI_USER>@<PI_IP>:~/amazon-kinesis-video-streams-webrtc-sdk-c/
+   ```
+
+3. **Build on the Pi** (one-time setup):
+
+   ```bash
+   ssh <PI_USER>@<PI_IP>
+   cd ~/amazon-kinesis-video-streams-webrtc-sdk-c
+   ./setup_pi.sh
+   ```
+
+   This installs all dependencies (GStreamer, build tools, OpenSSL) and compiles the SDK. Takes a few minutes on a Pi 5.
+
+4. **Export AWS credentials** and start streaming:
+
+   ```bash
+   export AWS_ACCESS_KEY_ID="..."
+   export AWS_SECRET_ACCESS_KEY="..."
+   export AWS_SESSION_TOKEN="..."    # if using temporary credentials
+   export AWS_DEFAULT_REGION="us-east-1"
+
+   ./run_3_streams_pi.sh
+   ```
+
+   Press `Ctrl+C` to stop all streams.
+
+### Laptop Setup (Testing)
+
+For local testing on macOS:
+
+```bash
+cd streaming
+mkdir -p build && cd build
+cmake ..
+make -j4
+
+# Export AWS credentials, then run a single camera stream:
+./samples/kvsWebrtcClientMasterGstSample <channel_name> video-only devicesrc <device_index>
+```
+
+### Video Pipeline Configuration
+
+The GStreamer pipeline is configurable via environment variables. Defaults work well on a laptop; the Pi script sets lower values for 3 simultaneous streams:
+
+| Variable | Default | Pi Default | Description |
+|----------|---------|------------|-------------|
+| `KVS_VIDEO_WIDTH` | `1280` | `640` | Output width (px) |
+| `KVS_VIDEO_HEIGHT` | `720` | `480` | Output height (px) |
+| `KVS_VIDEO_FPS` | `25` | `20` | Target framerate |
+| `KVS_VIDEO_BITRATE` | `512` | `384` | H.264 bitrate (kbps) |
+| `KVS_ENCODER_PRESET` | `veryfast` | `ultrafast` | x264enc speed preset |
+
+Override any setting by exporting the variable before running the stream script.
+
+### USB Camera Notes
+
+- Each USB camera creates two `/dev/video*` nodes on Linux (capture + metadata). The streaming app filters these automatically and only shows real capture devices.
+- The Raspberry Pi 5's ISP backend (`pispbe`) also registers as Video/Source devices. These are automatically filtered out.
+- For a stable camera-to-channel mapping, always plug each camera into the same USB port.
+- The Pi 5 has two USB 3.0 controllers. Spread cameras across both buses if you experience bandwidth issues.
+
 ## Deployment
 
 Build and deploy to Databricks Apps:
@@ -132,6 +226,11 @@ databricks bundle deploy -p <your-profile>
 │       ├── components/    # UI components (shadcn/ui)
 │       ├── lib/           # Utility libraries
 │       └── ...
+├── streaming/            # Git submodule: KVS WebRTC SDK (C)
+│   ├── samples/          # Modified GStreamer streaming sample
+│   ├── setup_pi.sh       # One-time Raspberry Pi build script
+│   ├── run_3_streams_pi.sh  # Launch 3 camera streams (Pi)
+│   └── ...
 ├── app.yml               # Databricks Apps runtime config
 ├── databricks.yml        # Databricks Asset Bundle config
 ├── pyproject.toml        # Python project config
