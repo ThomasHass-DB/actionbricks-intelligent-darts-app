@@ -1,1 +1,11 @@
 command: ["uvicorn", "intelligent_darts.backend.app:app", "--workers", "2"]
+
+env:
+  - name: INTELLIGENT_DARTS_SERVING_ENDPOINT_NAME
+    valueFrom: serving-endpoint
+
+resources:
+  - name: serving-endpoint
+    serving_endpoint:
+      name: dart_pose_detector
+      permission: CAN_QUERY

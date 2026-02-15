@@ -68,6 +68,12 @@ class AppConfig(BaseSettings):
 
     # ── Detection model ──────────────────────────────────────────────────────
 
+    serving_endpoint_name: str | None = Field(
+        default=None,
+        description="Databricks Model Serving endpoint name. "
+        "When set, remote inference is used instead of the local YOLO model.",
+    )
+
     @property
     def detection_model_path(self) -> Path:
         return project_root / "best.pt"

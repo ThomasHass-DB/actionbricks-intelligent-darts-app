@@ -565,17 +565,23 @@ dependencies = [
     { name = "boto3" },
     { name = "databricks-sdk" },
     { name = "fastapi" },
-    { name = "opencv-python-headless" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
-    { name = "ultralytics" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+local-inference = [
+    { name = "opencv-python-headless" },
+    { name = "ultralytics" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "apx" },
+    { name = "opencv-python-headless" },
     { name = "ty" },
+    { name = "ultralytics" },
 ]
 
 [package.metadata]
@@ -583,17 +589,20 @@ requires-dist = [
     { name = "boto3" },
     { name = "databricks-sdk", specifier = ">=0.74.0" },
     { name = "fastapi", specifier = ">=0.119.0" },
-    { name = "opencv-python-headless" },
+    { name = "opencv-python-headless", marker = "extra == 'local-inference'" },
     { name = "pydantic-settings", specifier = ">=2.11.0" },
     { name = "python-multipart" },
-    { name = "ultralytics" },
+    { name = "ultralytics", marker = "extra == 'local-inference'" },
     { name = "uvicorn", specifier = ">=0.37.0" },
 ]
+provides-extras = ["local-inference"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "apx", specifier = "==0.2.6", index = "https://databricks-solutions.github.io/apx/simple" },
+    { name = "opencv-python-headless" },
     { name = "ty", specifier = ">=0.0.12" },
+    { name = "ultralytics" },
 ]
 
 [[package]]

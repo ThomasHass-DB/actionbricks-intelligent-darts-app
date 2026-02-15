@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 from pathlib import Path
-
-import cv2
-import numpy as np
-from ultralytics import YOLO
+from typing import TYPE_CHECKING, Any
 
 from .logger import logger
 from .models import (
@@ -18,6 +16,11 @@ from .models import (
     DetectionOut,
     DetectionPointOut,
 )
+
+if TYPE_CHECKING:
+    import numpy as np
+    from databricks.sdk import WorkspaceClient
+    from ultralytics import YOLO
 
 # ── Board geometry (mirrors dartboard-geometry.ts) ───────────────────────────
 
@@ -93,8 +96,10 @@ def _apply_homography(matrix: list[list[float]], x: float, y: float) -> tuple[fl
 
 def load_model(model_path: Path) -> YOLO:
     """Load the YOLO model from disk."""
+    from ultralytics import YOLO as _YOLO
+
     logger.info(f"Loading YOLO model from {model_path}")
-    model = YOLO(str(model_path))
+    model = _YOLO(str(model_path))
     logger.info("YOLO model loaded successfully")
     return model
 
@@ -106,6 +111,9 @@ def _run_inference(model: YOLO, image_bytes: bytes) -> tuple[list[dict], int, in
     Each detection dict has keys:
       confidence, tip_x, tip_y, tail_x, tail_y, tail_visible, bbox
     """
+    import cv2
+    import numpy as np
+
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -193,17 +201,105 @@ def _run_inference(model: YOLO, image_bytes: bytes) -> tuple[list[dict], int, in
     return detections, img_w, img_h
 
 
+# ── Remote inference via Model Serving ───────────────────────────────────────
+
+
+def _run_inference_remote(
+    ws: WorkspaceClient,
+    endpoint_name: str,
+    image_bytes: bytes,
+) -> tuple[list[dict], int, int]:
+    """Run inference via a Databricks Model Serving endpoint.
+
+    The endpoint is expected to accept base64-encoded JPEG images and return
+    structured JSON with detections (keypoints, bbox, confidence) and image dims.
+
+    Returns (detections, image_width, image_height) — same shape as _run_inference.
+    """
+    b64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    response = ws.serving_endpoints.query(
+        name=endpoint_name,
+        inputs=[b64_image],
+    )
+
+    predictions: Any = response.predictions
+    if not predictions:
+        logger.warning(f"[remote] Empty predictions from endpoint {endpoint_name}")
+        return [], 0, 0
+
+    # The wrapper returns one result dict per input image
+    result = predictions[0] if isinstance(predictions, list) else predictions
+
+    img_w = int(result.get("image_width", 0))
+    img_h = int(result.get("image_height", 0))
+    detections: list[dict] = []
+
+    for det in result.get("detections", []):
+        kpts = det.get("keypoints", [])
+        parsed: dict = {}
+
+        # Tip (keypoint 0)
+        if len(kpts) < 1:
+            continue
+        tip_x, tip_y, tip_conf = float(kpts[0][0]), float(kpts[0][1]), float(kpts[0][2])
+        if tip_conf <= 0.1:
+            continue
+        parsed["tip_x"] = tip_x
+        parsed["tip_y"] = tip_y
+
+        # Tail (keypoint 1, optional)
+        if len(kpts) >= 2:
+            tail_x, tail_y, tail_conf = float(kpts[1][0]), float(kpts[1][1]), float(kpts[1][2])
+            if tail_conf > 0.1:
+                parsed["tail_x"] = tail_x
+                parsed["tail_y"] = tail_y
+                parsed["tail_visible"] = True
+            else:
+                parsed["tail_visible"] = False
+        else:
+            parsed["tail_visible"] = False
+
+        # Bounding box
+        bbox = det.get("bbox")
+        if bbox and len(bbox) == 4:
+            parsed["bbox"] = {
+                "x1": float(bbox[0]),
+                "y1": float(bbox[1]),
+                "x2": float(bbox[2]),
+                "y2": float(bbox[3]),
+            }
+
+        parsed["confidence"] = det.get("confidence", tip_conf)
+        detections.append(parsed)
+
+    logger.info(
+        f"[remote] Endpoint {endpoint_name}: {len(detections)} detections, "
+        f"image {img_w}x{img_h}"
+    )
+    return detections, img_w, img_h
+
+
 # ── Per-camera detection pipeline ────────────────────────────────────────────
 
 def _detect_for_camera(
-    model: YOLO,
     cam_id: int,
     image_bytes: bytes,
     calibration_json: str | None,
+    *,
+    model: YOLO | None = None,
+    ws: WorkspaceClient | None = None,
+    endpoint_name: str | None = None,
 ) -> DetectionCameraOut:
     """Run detection + scoring for ALL darts in a single camera image."""
     logger.info(f"[cam{cam_id}] Image size: {len(image_bytes)} bytes, calibration: {'yes' if calibration_json else 'no'}")
-    raw_detections, img_w, img_h = _run_inference(model, image_bytes)
+
+    if ws is not None and endpoint_name is not None:
+        raw_detections, img_w, img_h = _run_inference_remote(ws, endpoint_name, image_bytes)
+    elif model is not None:
+        raw_detections, img_w, img_h = _run_inference(model, image_bytes)
+    else:
+        raise ValueError("Either model or (ws, endpoint_name) must be provided")
     logger.info(f"[cam{cam_id}] Image decoded as {img_w}x{img_h}, raw detections: {len(raw_detections)}")
 
     cam_result = DetectionCameraOut(
@@ -306,11 +402,17 @@ def _deduplicate_by_board_position(
 
 
 def run_detection(
-    model: YOLO,
     images: list[tuple[int, bytes]],
     calibrations: list[tuple[int, str | None]],
+    *,
+    model: YOLO | None = None,
+    ws: WorkspaceClient | None = None,
+    endpoint_name: str | None = None,
 ) -> DetectionOut:
     """Run detection on all cameras, pick the best darts by confidence.
+
+    Either ``model`` (local YOLO) **or** ``ws`` + ``endpoint_name`` (remote
+    Databricks Model Serving) must be provided.
 
     Strategy:
       1. Run inference on all cameras.
@@ -325,7 +427,10 @@ def run_detection(
 
     for cam_id, img_bytes in images:
         cal = cal_map.get(cam_id)
-        cam_result = _detect_for_camera(model, cam_id, img_bytes, cal)
+        cam_result = _detect_for_camera(
+            cam_id, img_bytes, cal,
+            model=model, ws=ws, endpoint_name=endpoint_name,
+        )
         camera_results.append(cam_result)
 
     # Pool all scored darts from every camera

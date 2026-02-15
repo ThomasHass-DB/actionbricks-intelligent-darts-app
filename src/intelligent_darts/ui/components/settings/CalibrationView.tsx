@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Undo2, Check, RotateCcw } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, type PointerEvent as ReactPointerEvent } from "react";
+import { X, Undo2, Check, RotateCcw, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import {
   type Point,
@@ -157,6 +157,72 @@ function CalibrationGuide({ currentStep }: { currentStep: number }) {
         );
       })}
     </svg>
+  );
+}
+
+// ── Draggable panel ─────────────────────────────────────────────────────────
+
+function DraggablePanel({
+  children,
+  visible,
+}: {
+  children: React.ReactNode;
+  visible: boolean;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [pos, setPos] = useState({ x: -1, y: -1 });
+
+  // Initialise to bottom-left on first render
+  useEffect(() => {
+    setPos({ x: 16, y: window.innerHeight - 420 });
+  }, []);
+
+  const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = panelRef.current;
+    if (!el) return;
+    el.setPointerCapture(e.pointerId);
+    dragState.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+  }, [pos]);
+
+  const onPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const ds = dragState.current;
+    if (!ds) return;
+    setPos({
+      x: ds.origX + (e.clientX - ds.startX),
+      y: ds.origY + (e.clientY - ds.startY),
+    });
+  }, []);
+
+  const onPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = panelRef.current;
+    if (el) el.releasePointerCapture(e.pointerId);
+    dragState.current = null;
+  }, []);
+
+  return (
+    <div
+      ref={panelRef}
+      className={`absolute z-20 flex flex-col gap-2 transition-opacity duration-300 ${
+        visible ? "opacity-100" : "opacity-0 pointer-events-none"
+      }`}
+      style={{ left: pos.x, top: pos.y }}
+    >
+      {/* Drag handle */}
+      <div
+        className="flex items-center justify-center gap-1 cursor-grab active:cursor-grabbing rounded-md bg-white/10 hover:bg-white/20 text-white/50 hover:text-white/80 py-1 transition-colors select-none touch-none"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <GripVertical className="w-3.5 h-3.5" />
+        <span className="text-[10px] font-medium uppercase tracking-wider">Drag to move</span>
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -657,12 +723,8 @@ export function CalibrationView({
         )}
       </div>
 
-      {/* ── Right-side panel (guide + zoom) ──────────────────────────── */}
-      <div
-        className={`absolute top-14 right-4 z-20 flex flex-col gap-2 transition-opacity duration-300 ${
-          calibrationDone ? "opacity-0 pointer-events-none" : "opacity-100"
-        }`}
-      >
+      {/* ── Draggable panel (guide + zoom) ──────────────────────────── */}
+      <DraggablePanel visible={!calibrationDone}>
         {/* Reference guide */}
         <div className="rounded-lg overflow-hidden shadow-2xl border border-white/15 bg-black/90">
           <div className="text-[10px] text-white/50 bg-black/80 px-2 py-0.5 text-center tracking-wider font-medium uppercase">
@@ -683,7 +745,7 @@ export function CalibrationView({
             style={{ width: 140, height: 140, display: "block" }}
           />
         </div>
-      </div>
+      </DraggablePanel>
 
       {/* ── Bottom bar ───────────────────────────────────────────────── */}
       <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none">

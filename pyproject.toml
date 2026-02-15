@@ -10,14 +10,20 @@ dependencies = [
     "uvicorn>=0.37.0",
     "databricks-sdk>=0.74.0",
     "python-multipart",
+    "boto3",
+]
+
+[project.optional-dependencies]
+local-inference = [
     "ultralytics",
     "opencv-python-headless",
-    "boto3",
 ]
 
 [dependency-groups]
 dev = [
     "ty>=0.0.12", "apx==0.2.6",
+    "ultralytics",
+    "opencv-python-headless",
 ]
 
 [tool.apx.metadata]

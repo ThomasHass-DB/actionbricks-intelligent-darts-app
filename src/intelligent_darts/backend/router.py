@@ -488,8 +488,6 @@ async def run_detection_endpoint(
     """Run dart detection on 3 camera images and return the scored result."""
     from .detection import run_detection
 
-    model = runtime.get_detection_model()
-
     images: list[tuple[int, bytes]] = []
     for cam_id, upload in [(1, cam1), (2, cam2), (3, cam3)]:
         data = await upload.read()
@@ -501,4 +499,13 @@ async def run_detection_endpoint(
         (3, calibration3),
     ]
 
-    return run_detection(model, images, calibrations)
+    if runtime.uses_remote_inference:
+        return run_detection(
+            images,
+            calibrations,
+            ws=runtime.ws,
+            endpoint_name=runtime.config.serving_endpoint_name,
+        )
+    else:
+        model = runtime.get_detection_model()
+        return run_detection(images, calibrations, model=model)

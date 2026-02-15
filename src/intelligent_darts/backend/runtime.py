@@ -26,8 +26,16 @@ class Runtime:
         self.camera_settings: CameraSettingsOut = _default_camera_settings()
         self._detection_model = None
 
+    @property
+    def uses_remote_inference(self) -> bool:
+        """True when a Databricks Model Serving endpoint is configured."""
+        return bool(self.config.serving_endpoint_name)
+
     def get_detection_model(self):
-        """Lazily load and cache the YOLO detection model."""
+        """Lazily load and cache the YOLO detection model.
+
+        Only used when *not* using remote inference (i.e. local development).
+        """
         if self._detection_model is None:
             from .detection import load_model
 
