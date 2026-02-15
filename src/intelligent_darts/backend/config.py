@@ -25,3 +25,49 @@ class AppConfig(BaseSettings):
     @property
     def static_assets_path(self) -> Path:
         return Path(str(resources.files(app_slug))).joinpath("__dist__")
+
+    # ── Dataset paths ────────────────────────────────────────────────────────
+
+    @property
+    def dataset_root(self) -> Path:
+        return project_root / "dataset"
+
+    @property
+    def raw_captures_dir(self) -> Path:
+        return self.dataset_root / "raw_captures"
+
+    @property
+    def yolo_root(self) -> Path:
+        return project_root / "datasets" / "darts"
+
+    @property
+    def yolo_images_train(self) -> Path:
+        return self.yolo_root / "images" / "train"
+
+    @property
+    def yolo_images_val(self) -> Path:
+        return self.yolo_root / "images" / "val"
+
+    @property
+    def yolo_labels_train(self) -> Path:
+        return self.yolo_root / "labels" / "train"
+
+    @property
+    def yolo_labels_val(self) -> Path:
+        return self.yolo_root / "labels" / "val"
+
+    @property
+    def data_yaml_path(self) -> Path:
+        return self.dataset_root / "data.yaml"
+
+    # ── Calibration persistence ──────────────────────────────────────────────
+
+    @property
+    def calibration_file_path(self) -> Path:
+        return project_root / "calibration.json"
+
+    # ── Detection model ──────────────────────────────────────────────────────
+
+    @property
+    def detection_model_path(self) -> Path:
+        return project_root / "best.pt"

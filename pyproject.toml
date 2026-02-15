@@ -9,11 +9,15 @@ dependencies = [
     "pydantic-settings>=2.11.0",
     "uvicorn>=0.37.0",
     "databricks-sdk>=0.74.0",
+    "python-multipart",
+    "ultralytics",
+    "opencv-python-headless",
+    "boto3",
 ]
 
 [dependency-groups]
 dev = [
-    "ty>=0.0.12",
+    "ty>=0.0.12", "apx==0.2.6",
 ]
 
 [tool.apx.metadata]
@@ -42,6 +46,17 @@ source = "uv-dynamic-versioning"
 [tool.uv-dynamic-versioning]
 vcs = "git"
 fallback-version = "0.0.0"
+
+[tool.uv]
+
+[[tool.uv.index]]
+name = "apx-index"
+url = "https://databricks-solutions.github.io/apx/simple"
+
+[tool.uv.sources]
+
+[tool.uv.sources.apx]
+index = "apx-index"
 
 [tool.hatch.build.hooks.version]
 path = "src/intelligent_darts/_version.py"

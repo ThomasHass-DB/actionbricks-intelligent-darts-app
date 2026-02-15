@@ -38,3 +38,16 @@ node_modules/
 
 # UI dist folder
 src/intelligent_darts/__dist__/
+
+# ML model weights
+best.pt
+
+# Runtime/environment-specific data
+calibration.json
+
+# Training datasets
+dataset/
+datasets/
+
+# Cursor IDE (keep rules/, ignore mcp.json)
+.cursor/mcp.json
