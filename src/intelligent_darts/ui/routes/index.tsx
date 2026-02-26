@@ -7,8 +7,10 @@ import type { DartThrow } from "@/components/darts/ScoreDisplay";
 import { Leaderboard } from "@/components/darts/Leaderboard";
 import type { LeaderboardEntry } from "@/components/darts/Leaderboard";
 import { segmentHitPoint } from "@/lib/segment-hitpoint";
+import { scoreFromPixel } from "@/lib/board-scoring";
+import type { Matrix3x3 } from "@/lib/homography";
 import { Link } from "@tanstack/react-router";
-import type { DetectionCameraOut, DetectedDartOut, CameraSettingsOut } from "@/lib/api";
+import type { DetectionCameraOut, DetectedDartOut, CameraSettingsOut, DetectionOut } from "@/lib/api";
 import { getCalibration, getCameraSettings, CameraMode } from "@/lib/api";
 import { KinesisCameraFeed } from "@/components/kinesis/KinesisCameraFeed";
 import {
@@ -22,8 +24,15 @@ import {
   Loader2,
   Video,
   X,
+  ChevronLeft,
+  ChevronRight,
+  Move,
+  Check,
+  Database,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Switch } from "@/components/ui/switch";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -44,6 +53,17 @@ interface CameraSlot {
 
 const NUM_CAMERAS = 3;
 const STORAGE_KEY = "darts_camera_slots";
+
+type AutoDetectPhase = "off" | "idle" | "detecting" | "paused";
+const AUTO_DETECT_STORAGE_KEY = "darts_auto_detect_enabled";
+
+const AUTO_POLL_INTERVAL_MS = 500;
+const REMOVAL_COOLDOWN_MS = 2000;
+const MATCH_RADIUS_MM = 25;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
 
 function loadSlots(): CameraSlot[] {
   try {
@@ -166,26 +186,63 @@ function MiniCameraFeed({
 
 // ── Camera Detection Overlay Dialog ─────────────────────────────────────────
 
+interface DetectionDialogProps {
+  camId: number;
+  imageDataUrl: string | null;
+  camResult: DetectionCameraOut | undefined;
+  isChosen: boolean;
+  onClose: () => void;
+  onNavigate: (direction: "prev" | "next") => void;
+  calibrationMatrix: number[][] | null;
+  onApplyCorrection?: (dartIndex: number, newScore: { value: number; label: string; segmentId: string; boardX: number; boardY: number }) => void;
+  onAddToLabelingSet?: (camId: number, darts: Array<{ tipX: number; tipY: number; tailX: number; tailY: number; tailVisible: boolean }>) => void;
+}
+
 function CameraDetectionDialog({
   camId,
   imageDataUrl,
   camResult,
   isChosen,
   onClose,
-}: {
-  camId: number;
-  imageDataUrl: string | null;
-  camResult: DetectionCameraOut | undefined;
-  isChosen: boolean;
-  onClose: () => void;
-}) {
+  onNavigate,
+  calibrationMatrix,
+  onApplyCorrection,
+  onAddToLabelingSet,
+}: DetectionDialogProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [adjustMode, setAdjustMode] = useState(false);
+  const [selectedDart, setSelectedDart] = useState<number | null>(null);
+  const [addingToLabeling, setAddingToLabeling] = useState(false);
+
+  // Mutable dart positions in image-pixel coords (source of truth while adjusting)
+  const [dartPositions, setDartPositions] = useState<
+    Array<{ tipX: number; tipY: number; tailX: number | null; tailY: number | null }>
+  >([]);
+
+  // Dragging state
+  const draggingRef = useRef<{ dartIdx: number; point: "tip" | "tail" } | null>(null);
+
+  // Initialize dart positions from detection result
+  useEffect(() => {
+    const darts = camResult?.darts ?? [];
+    setDartPositions(
+      darts.map((d) => ({
+        tipX: d.tip?.x ?? 0,
+        tipY: d.tip?.y ?? 0,
+        tailX: d.tail?.x ?? null,
+        tailY: d.tail?.y ?? null,
+      })),
+    );
+    setAdjustMode(false);
+    setSelectedDart(null);
+  }, [camResult]);
 
   // Load the snapshot image
   useEffect(() => {
     if (!imageDataUrl) return;
+    setLoaded(false);
     const img = new window.Image();
     img.onload = () => {
       imgRef.current = img;
@@ -212,11 +269,19 @@ function CameraDetectionDialog({
     const scaleY = img.naturalHeight / imgH;
 
     for (let i = 0; i < darts.length; i++) {
+      if (i >= dartPositions.length) continue;
       const dart = darts[i];
+      const pos = dartPositions[i];
       const color = DART_COLORS[i % DART_COLORS.length];
+      const isSelected = adjustMode && selectedDart === i;
 
-      // Bounding box
-      if (dart.bbox) {
+      const tipX = (pos?.tipX ?? dart.tip?.x ?? 0) * scaleX;
+      const tipY = (pos?.tipY ?? dart.tip?.y ?? 0) * scaleY;
+      const hasTail = pos ? pos.tailX != null : dart.tail != null;
+      const tailX = hasTail ? ((pos?.tailX ?? dart.tail?.x ?? 0) * scaleX) : 0;
+      const tailY = hasTail ? ((pos?.tailY ?? dart.tail?.y ?? 0) * scaleY) : 0;
+
+      if (!adjustMode && dart.bbox) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 3;
         const bx = dart.bbox.x1 * scaleX;
@@ -225,7 +290,6 @@ function CameraDetectionDialog({
         const bh = (dart.bbox.y2 - dart.bbox.y1) * scaleY;
         ctx.strokeRect(bx, by, bw, bh);
 
-        // Label background
         const label = dart.score_label
           ? `${dart.score_label} (${dart.score_value ?? "?"}) ${((dart.confidence ?? 0) * 100).toFixed(0)}%`
           : `Dart ${i + 1} ${((dart.confidence ?? 0) * 100).toFixed(0)}%`;
@@ -237,53 +301,184 @@ function CameraDetectionDialog({
         ctx.fillText(label, bx + 4, by - 6);
       }
 
-      // Tip keypoint
-      if (dart.tip) {
-        const tx = dart.tip.x * scaleX;
-        const ty = dart.tip.y * scaleY;
+      if (hasTail) {
         ctx.beginPath();
-        ctx.arc(tx, ty, 8, 0, Math.PI * 2);
-        ctx.fillStyle = "#ef4444";
-        ctx.fill();
-        ctx.strokeStyle = "white";
-        ctx.lineWidth = 2;
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tailX, tailY);
+        ctx.strokeStyle = isSelected ? "rgba(250, 204, 21, 1)" : "rgba(250, 204, 21, 0.8)";
+        ctx.lineWidth = isSelected ? 3 : 2.5;
         ctx.stroke();
-        ctx.font = "bold 12px system-ui";
-        ctx.fillStyle = "white";
-        ctx.textAlign = "center";
-        ctx.fillText("TIP", tx, ty - 14);
-        ctx.textAlign = "start";
       }
 
-      // Tail keypoint
-      if (dart.tail) {
-        const fx = dart.tail.x * scaleX;
-        const fy = dart.tail.y * scaleY;
+      ctx.globalAlpha = 1.0;
+      const tipRadius = isSelected ? 12 : 8;
+      ctx.beginPath();
+      ctx.arc(tipX, tipY, tipRadius, 0, Math.PI * 2);
+      ctx.fillStyle = "#ef4444";
+      ctx.fill();
+      ctx.strokeStyle = isSelected ? "#fbbf24" : "white";
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.stroke();
+      ctx.font = "bold 12px system-ui";
+      ctx.fillStyle = "white";
+      ctx.textAlign = "center";
+      ctx.fillText(`TIP ${i + 1}`, tipX, tipY - (tipRadius + 6));
+      ctx.textAlign = "start";
+
+      if (hasTail) {
+        const tailRadius = isSelected ? 11 : 7;
         ctx.beginPath();
-        ctx.arc(fx, fy, 7, 0, Math.PI * 2);
+        ctx.arc(tailX, tailY, tailRadius, 0, Math.PI * 2);
         ctx.fillStyle = "#3b82f6";
         ctx.fill();
-        ctx.strokeStyle = "white";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = isSelected ? "#fbbf24" : "white";
+        ctx.lineWidth = isSelected ? 3 : 2;
         ctx.stroke();
         ctx.font = "bold 12px system-ui";
         ctx.fillStyle = "white";
         ctx.textAlign = "center";
-        ctx.fillText("TAIL", fx, fy - 12);
+        ctx.fillText(`TAIL ${i + 1}`, tailX, tailY - (tailRadius + 5));
         ctx.textAlign = "start";
       }
 
-      // Line between tip and tail
-      if (dart.tip && dart.tail) {
+      if (isSelected) {
         ctx.beginPath();
-        ctx.moveTo(dart.tip.x * scaleX, dart.tip.y * scaleY);
-        ctx.lineTo(dart.tail.x * scaleX, dart.tail.y * scaleY);
-        ctx.strokeStyle = "rgba(250, 204, 21, 0.8)";
-        ctx.lineWidth = 2.5;
+        ctx.arc(tipX, tipY, tipRadius + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(251, 191, 36, 0.6)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
         ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
-  }, [loaded, camResult]);
+  }, [loaded, camResult, adjustMode, selectedDart, dartPositions]);
+
+  // Convert canvas click/mouse to image-pixel coords
+  const toImageCoords = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>): { x: number; y: number } | null => {
+      const canvas = canvasRef.current;
+      const img = imgRef.current;
+      if (!canvas || !img) return null;
+      const rect = canvas.getBoundingClientRect();
+      const imgW = camResult?.image_width ?? img.naturalWidth;
+      const imgH = camResult?.image_height ?? img.naturalHeight;
+      const scaleX = img.naturalWidth / imgW;
+      const scaleY = img.naturalHeight / imgH;
+      const cx = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      const cy = ((e.clientY - rect.top) / rect.height) * canvas.height;
+      return { x: cx / scaleX, y: cy / scaleY };
+    },
+    [camResult],
+  );
+
+  const DRAG_HIT_RADIUS = 20;
+
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!adjustMode) return;
+      const pt = toImageCoords(e);
+      if (!pt) return;
+
+      const imgW = camResult?.image_width ?? imgRef.current?.naturalWidth ?? 1;
+      const scaleX = (imgRef.current?.naturalWidth ?? imgW) / imgW;
+      const scaleY = (imgRef.current?.naturalHeight ?? (camResult?.image_height ?? 1)) / (camResult?.image_height ?? 1);
+
+      const canvasRect = canvasRef.current?.getBoundingClientRect();
+      const displayScale = canvasRect ? (imgRef.current?.naturalWidth ?? 1) / canvasRect.width : 1;
+      const hitRadius = DRAG_HIT_RADIUS * displayScale;
+
+      let bestDist = Infinity;
+      let bestDartIdx = -1;
+      let bestPoint: "tip" | "tail" = "tip";
+
+      for (let i = 0; i < dartPositions.length; i++) {
+        const pos = dartPositions[i];
+        if (!pos) continue;
+        const dtTip = Math.hypot((pt.x - pos.tipX) * scaleX, (pt.y - pos.tipY) * scaleY);
+        if (dtTip < hitRadius && dtTip < bestDist) {
+          bestDist = dtTip;
+          bestDartIdx = i;
+          bestPoint = "tip";
+        }
+        if (pos.tailX != null && pos.tailY != null) {
+          const dtTail = Math.hypot((pt.x - pos.tailX) * scaleX, (pt.y - pos.tailY) * scaleY);
+          if (dtTail < hitRadius && dtTail < bestDist) {
+            bestDist = dtTail;
+            bestDartIdx = i;
+            bestPoint = "tail";
+          }
+        }
+      }
+
+      if (bestDartIdx >= 0) {
+        setSelectedDart(bestDartIdx);
+        draggingRef.current = { dartIdx: bestDartIdx, point: bestPoint };
+        e.preventDefault();
+      }
+    },
+    [adjustMode, dartPositions, toImageCoords, camResult],
+  );
+
+  const handleCanvasMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!draggingRef.current) return;
+      const pt = toImageCoords(e);
+      if (!pt) return;
+      const { dartIdx, point } = draggingRef.current;
+      setDartPositions((prev) => {
+        const next = [...prev];
+        const p = { ...next[dartIdx] };
+        if (point === "tip") {
+          p.tipX = pt.x;
+          p.tipY = pt.y;
+        } else {
+          p.tailX = pt.x;
+          p.tailY = pt.y;
+        }
+        next[dartIdx] = p;
+        return next;
+      });
+    },
+    [toImageCoords],
+  );
+
+  const handleCanvasMouseUp = useCallback(() => {
+    draggingRef.current = null;
+  }, []);
+
+  const handleApply = useCallback(() => {
+    if (selectedDart == null || !calibrationMatrix) return;
+    const pos = dartPositions[selectedDart];
+    if (!pos) return;
+    const result = scoreFromPixel(calibrationMatrix as Matrix3x3, { x: pos.tipX, y: pos.tipY });
+    onApplyCorrection?.(selectedDart, result);
+    toast.success(`Corrected dart ${selectedDart + 1}: ${result.label} (${result.value} pts)`);
+  }, [selectedDart, dartPositions, calibrationMatrix, onApplyCorrection]);
+
+  const handleRemoveDart = useCallback((idx: number) => {
+    setDartPositions((prev) => prev.filter((_, i) => i !== idx));
+    if (selectedDart === idx) setSelectedDart(null);
+    else if (selectedDart != null && selectedDart > idx) setSelectedDart(selectedDart - 1);
+  }, [selectedDart]);
+
+  const handleAddToLabeling = useCallback(async () => {
+    if (!onAddToLabelingSet) return;
+    setAddingToLabeling(true);
+    try {
+      const labelDarts = dartPositions
+        .filter((p) => p.tipX !== 0 || p.tipY !== 0)
+        .map((p) => ({
+          tipX: p.tipX,
+          tipY: p.tipY,
+          tailX: p.tailX ?? 0,
+          tailY: p.tailY ?? 0,
+          tailVisible: p.tailX != null && p.tailY != null,
+        }));
+      await onAddToLabelingSet(camId, labelDarts);
+    } finally {
+      setAddingToLabeling(false);
+    }
+  }, [onAddToLabelingSet, dartPositions, camId]);
 
   if (!imageDataUrl) {
     return (
@@ -303,10 +498,24 @@ function CameraDetectionDialog({
       <div className="bg-background rounded-2xl border border-border shadow-2xl max-w-4xl max-h-[90vh] w-full flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onNavigate("prev")}
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="Previous camera"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
             <h2 className="text-sm font-semibold text-foreground">
-              Camera {camId} — Detection Results
+              Camera {camId}
             </h2>
+            <button
+              onClick={() => onNavigate("next")}
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="Next camera"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
             {isChosen && (
               <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-400">
                 Chosen
@@ -316,42 +525,121 @@ function CameraDetectionDialog({
               {darts.length} dart{darts.length !== 1 ? "s" : ""} detected
             </span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {darts.length > 0 && (
+              <button
+                onClick={() => {
+                  setAdjustMode((v) => !v);
+                  if (adjustMode) setSelectedDart(null);
+                  else if (darts.length > 0) setSelectedDart(0);
+                }}
+                className={`flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium transition-colors ${
+                  adjustMode
+                    ? "bg-amber-500/20 text-amber-400"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                }`}
+              >
+                <Move className="w-3.5 h-3.5" />
+                {adjustMode ? "Adjusting" : "Adjust"}
+              </button>
+            )}
+            <button onClick={onClose} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Canvas with detections */}
         <div className="flex-1 min-h-0 flex items-center justify-center bg-black p-2">
           <canvas
             ref={canvasRef}
-            className="max-w-full max-h-full object-contain rounded-lg"
-            style={{ maxHeight: "65vh" }}
+            className={`max-w-full max-h-full object-contain rounded-lg ${adjustMode ? "cursor-grab" : ""}`}
+            style={{ maxHeight: "60vh" }}
+            onMouseDown={adjustMode ? handleCanvasMouseDown : undefined}
+            onMouseMove={adjustMode ? handleCanvasMouseMove : undefined}
+            onMouseUp={adjustMode ? handleCanvasMouseUp : undefined}
+            onMouseLeave={adjustMode ? handleCanvasMouseUp : undefined}
           />
         </div>
 
-        {/* Dart list */}
+        {/* Dart list + actions */}
         {darts.length > 0 && (
           <div className="px-5 py-3 border-t border-border">
-            <div className="flex flex-wrap gap-2">
-              {darts.map((dart, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card/60 text-xs"
-                >
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: DART_COLORS[i % DART_COLORS.length] }} />
-                  <span className="font-semibold text-foreground">
-                    {dart.score_label ?? "?"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {dart.score_value != null ? `${dart.score_value} pts` : "no score"}
-                  </span>
-                  <span className="text-muted-foreground/60">
-                    {((dart.confidence ?? 0) * 100).toFixed(0)}%
-                  </span>
-                </div>
-              ))}
+            <div className="flex flex-wrap gap-2 mb-2">
+              {darts.map((dart, i) => {
+                if (i >= dartPositions.length) return null;
+                return (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition-colors cursor-pointer hover:bg-accent/40 ${
+                      adjustMode && selectedDart === i
+                        ? "border-amber-500/60 bg-amber-500/10 ring-1 ring-amber-500/30"
+                        : "border-border bg-card/60"
+                    }`}
+                    onClick={() => {
+                      if (!adjustMode) {
+                        setAdjustMode(true);
+                        setSelectedDart(i);
+                      } else {
+                        setSelectedDart(i);
+                      }
+                    }}
+                  >
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: DART_COLORS[i % DART_COLORS.length] }} />
+                    <span className="font-semibold text-foreground">
+                      {dart.score_label ?? "?"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {dart.score_value != null ? `${dart.score_value} pts` : "no score"}
+                    </span>
+                    <span className="text-muted-foreground/60">
+                      {((dart.confidence ?? 0) * 100).toFixed(0)}%
+                    </span>
+                    {adjustMode && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveDart(i);
+                        }}
+                        className="ml-1 p-0.5 rounded text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                        title="Remove this detection"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+
+            {/* Adjust-mode actions */}
+            {adjustMode && (
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={handleApply}
+                  disabled={selectedDart == null || !calibrationMatrix}
+                  className="flex items-center gap-1.5 h-8 px-4 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Apply
+                </button>
+                <button
+                  onClick={handleAddToLabeling}
+                  disabled={addingToLabeling}
+                  className="flex items-center gap-1.5 h-8 px-4 rounded-lg bg-violet-600 text-white text-xs font-medium hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {addingToLabeling ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Database className="w-3.5 h-3.5" />
+                  )}
+                  Add to labeling set
+                </button>
+                <p className="text-[10px] text-muted-foreground ml-2">
+                  Click any dart to select, drag tip/tail to move, trash to remove
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -418,6 +706,26 @@ function Index() {
   const [manualClickEnabled, setManualClickEnabled] = useState(true);
   const [detecting, setDetecting] = useState(false);
 
+  const [autoDetectEnabled, setAutoDetectEnabled] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(AUTO_DETECT_STORAGE_KEY);
+      return raw == null ? true : raw === "true";
+    } catch {
+      return true;
+    }
+  });
+  const [autoDetectPhase, setAutoDetectPhase] = useState<AutoDetectPhase>(
+    autoDetectEnabled ? "idle" : "off",
+  );
+  const [autoDetectPausedReason, setAutoDetectPausedReason] = useState<string | null>(null);
+
+  const currentDartsRef = useRef<DartThrow[]>([]);
+  useEffect(() => {
+    currentDartsRef.current = currentDarts;
+  }, [currentDarts]);
+
+  const autoInFlightRef = useRef(false);
+
   // Camera mode (loaded from backend)
   const [cameraSettings, setCameraSettings] = useState<CameraSettingsOut | null>(null);
   const cameraMode = cameraSettings?.mode ?? CameraMode.local;
@@ -427,6 +735,15 @@ function Index() {
       .then(({ data }) => setCameraSettings(data))
       .catch(() => { /* backend unavailable, default to local */ });
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_DETECT_STORAGE_KEY, String(autoDetectEnabled));
+    } catch { /* ignore */ }
+    autoInFlightRef.current = false;
+    setAutoDetectPhase(autoDetectEnabled ? "idle" : "off");
+    if (!autoDetectEnabled) setAutoDetectPausedReason(null);
+  }, [autoDetectEnabled]);
 
   // Camera refs — load from localStorage first, then merge backend calibrations
   const [slots, setSlots] = useState<CameraSlot[]>(loadSlots);
@@ -477,6 +794,7 @@ function Index() {
     cameras: DetectionCameraOut[];
     chosenCamId: number | null;
     snapshots: (string | null)[]; // data URLs per camera
+    blobs: (Blob | null)[]; // JPEG blobs per camera (for labeling upload)
   } | null>(null);
 
   // Which camera overlay dialog is open (null = closed)
@@ -490,15 +808,76 @@ function Index() {
 
   const roundComplete = currentDarts.length >= 3;
 
+  const pauseAutoDetect = useCallback((reason: string) => {
+    setAutoDetectPausedReason(reason);
+    autoInFlightRef.current = false;
+    setAutoDetectPhase("paused");
+  }, []);
+
+  const resumeAutoDetect = useCallback(() => {
+    setAutoDetectPausedReason(null);
+    autoInFlightRef.current = false;
+    setAutoDetectPhase(autoDetectEnabled ? "idle" : "off");
+  }, [autoDetectEnabled]);
+
+  function distMm(ax: number, ay: number, bx: number, by: number) {
+    const dx = ax - bx;
+    const dy = ay - by;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function asAutoThrow(d: DetectedDartOut): DartThrow | null {
+    if (d.score_value == null) return null;
+    if (d.board_x == null || d.board_y == null) return null;
+    return {
+      value: d.score_value,
+      label: d.score_label ?? "?",
+      source: "auto",
+      boardX: d.board_x,
+      boardY: d.board_y,
+      segmentId: d.segment_id ?? undefined,
+      confidence: d.confidence ?? undefined,
+    };
+  }
+
+  function getAutoDartsWithCoords(darts: DartThrow[]) {
+    return darts.filter(
+      (t) => t.source === "auto" && t.boardX != null && t.boardY != null,
+    ) as Array<Required<Pick<DartThrow, "boardX" | "boardY">> & DartThrow>;
+  }
+
   const top3Threshold = useMemo(() => {
     const sorted = [...leaderboard].sort((a, b) => b.score - a.score);
     return sorted.length >= 3 ? sorted[2].score : 0;
   }, [leaderboard]);
 
+  const autoStatus = useMemo(() => {
+    if (!autoDetectEnabled) return { text: "Off", className: "text-muted-foreground" };
+    if (autoDetectPausedReason) return { text: "Paused", className: "text-amber-500" };
+    if (!hasAnyCameras) return { text: "No cameras", className: "text-muted-foreground" };
+    if (!hasAnyCalibration) return { text: "No calibration", className: "text-muted-foreground" };
+    if (roundComplete) return { text: "Round complete", className: "text-muted-foreground" };
+
+    switch (autoDetectPhase) {
+      case "detecting":
+        return { text: "Detecting…", className: "text-violet-500 animate-pulse" };
+      case "idle":
+      default:
+        return { text: "Active", className: "text-emerald-500" };
+    }
+  }, [
+    autoDetectEnabled,
+    autoDetectPausedReason,
+    hasAnyCameras,
+    hasAnyCalibration,
+    roundComplete,
+    autoDetectPhase,
+  ]);
+
   const handleScore = useCallback(
     (value: number, label: string, hit: { x: number; y: number; segmentId: string }) => {
       if (roundComplete) return;
-      const newDart: DartThrow = { value, label };
+      const newDart: DartThrow = { value, label, source: "manual" };
       const next = [...currentDarts, newDart];
       setCurrentDarts(next);
       setBoardHits((prev) => [...prev, { ...hit, value, label }]);
@@ -518,32 +897,14 @@ function Index() {
     [currentDarts, roundComplete, top3Threshold, leaderboard.length],
   );
 
-  // ── Detection handler ───────────────────────────────────────────────────
+  // ── Detection helpers ───────────────────────────────────────────────────
 
-  const handleDetection = useCallback(async () => {
-    if (roundComplete || detecting) return;
-
-    if (!hasAnyCameras) {
-      toast.error("No cameras assigned. Go to Settings to configure cameras.");
-      return;
-    }
-    if (!hasAnyCalibration) {
-      toast.error("No cameras calibrated. Go to Settings → Calibrate at least one camera.");
-      return;
-    }
-
-    setDetecting(true);
-
-    const safetyTimer = setTimeout(() => {
-      setDetecting(false);
-      toast.error("Detection timed out. Please try again.");
-    }, 60_000);
-
-    try {
+  const buildDetectionPayload = useCallback(
+    (includeSnapshots: boolean) => {
       const formData = new FormData();
       const snapshots: (string | null)[] = [];
+      const blobs: (Blob | null)[] = [];
 
-      // Snapshot each camera
       let capturedCount = 0;
       for (let i = 0; i < NUM_CAMERAS; i++) {
         const video = videoRefs.current[i].current;
@@ -555,14 +916,15 @@ function Index() {
           const ctx = canvas.getContext("2d")!;
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           const blob = canvasToJpegBlob(canvas, 0.85);
-          console.log(`[detection] cam${i + 1}: ${canvas.width}x${canvas.height}, blob=${blob.size} bytes`);
           formData.append(`cam${i + 1}`, blob, `cam${i + 1}.jpg`);
-          snapshots.push(canvas.toDataURL("image/jpeg", 0.85));
+          snapshots.push(includeSnapshots ? canvas.toDataURL("image/jpeg", 0.85) : null);
+          blobs.push(blob);
           capturedCount++;
         } else {
-          console.log(`[detection] cam${i + 1}: no video stream, sending placeholder`);
-          formData.append(`cam${i + 1}`, createPlaceholderBlob(), `cam${i + 1}.jpg`);
+          const placeholder = createPlaceholderBlob();
+          formData.append(`cam${i + 1}`, placeholder, `cam${i + 1}.jpg`);
           snapshots.push(null);
+          blobs.push(null);
         }
 
         const cal = slots[i].calibration;
@@ -571,15 +933,22 @@ function Index() {
         }
       }
 
+      return { formData, snapshots, blobs, capturedCount };
+    },
+    [slots],
+  );
+
+  const runDetectionRequest = useCallback(
+    async (includeSnapshots: boolean) => {
+      const { formData, snapshots, blobs, capturedCount } = buildDetectionPayload(includeSnapshots);
       if (capturedCount === 0) {
-        toast.error("No cameras are producing video. Check that cameras are connected and streams are active.");
-        return;
+        throw new Error(
+          "No cameras are producing video. Check that cameras are connected and streams are active.",
+        );
       }
-      console.log(`[detection] Sending ${capturedCount} real camera frames to /api/detection`);
 
       const controller = new AbortController();
       const fetchTimer = setTimeout(() => controller.abort(), 45_000);
-
       const res = await fetch("/api/detection", {
         method: "POST",
         body: formData,
@@ -592,19 +961,102 @@ function Index() {
         throw new Error(`HTTP ${res.status}: ${errText}`);
       }
 
-      const result = await res.json();
+      const result = (await res.json()) as DetectionOut;
+      return { result, snapshots, blobs };
+    },
+    [buildDetectionPayload],
+  );
 
-      // Store full detection results for camera overlay
+  function detectedAutoThrows(result: DetectionOut): DartThrow[] {
+    const darts: DetectedDartOut[] = result.darts ?? [];
+    const scored = darts.filter((d) => d.score_value != null);
+    return scored.map(asAutoThrow).filter(Boolean) as DartThrow[];
+  }
+
+  function computeNewAutoThrows(prevDarts: DartThrow[], detected: DartThrow[]) {
+    const existingAuto = getAutoDartsWithCoords(prevDarts);
+
+    const removalDetected =
+      existingAuto.length > 0 &&
+      existingAuto.some(
+        (ex) =>
+          !detected.some(
+            (d) =>
+              d.boardX != null &&
+              d.boardY != null &&
+              distMm(ex.boardX, ex.boardY, d.boardX, d.boardY) < MATCH_RADIUS_MM,
+          ),
+      );
+
+    const newCandidates = detected.filter(
+      (d) =>
+        d.boardX != null &&
+        d.boardY != null &&
+        !existingAuto.some(
+          (ex) => distMm(ex.boardX, ex.boardY, d.boardX!, d.boardY!) < MATCH_RADIUS_MM,
+        ),
+    );
+    newCandidates.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+
+    return { removalDetected, newCandidates };
+  }
+
+  const appendDarts = useCallback(
+    (toAdd: DartThrow[], chosenCamId: number | null, toastPrefix: string) => {
+      const prev = currentDartsRef.current;
+      if (prev.length >= 3) return;
+
+      const slotsRemaining = 3 - prev.length;
+      const dartsToAdd = toAdd.slice(0, slotsRemaining);
+      if (dartsToAdd.length === 0) return;
+
+      const newHits: DartBoardHit[] = dartsToAdd.map((d) => {
+        const hitPt = segmentHitPoint(d.segmentId ?? "miss", d.boardX, d.boardY);
+        return {
+          x: hitPt.x,
+          y: hitPt.y,
+          segmentId: d.segmentId ?? "miss",
+          value: d.value,
+          label: d.label,
+        };
+      });
+
+      const allDarts = [...prev, ...dartsToAdd];
+      setCurrentDarts(allDarts);
+      setBoardHits((prevHits) => [...prevHits, ...newHits]);
+
+      const lastDart = dartsToAdd[dartsToAdd.length - 1];
+      if (allDarts.length >= 3) {
+        const total = allDarts.reduce((sum, d) => sum + d.value, 0);
+        setCommentary(getRoundEndComment(total));
+        if (total > top3Threshold || leaderboard.length < 3) {
+          setShowNameInput(true);
+        }
+      } else {
+        setCommentary(getCommentary(lastDart, allDarts.length - 1, allDarts));
+      }
+      setCommentaryKey((k) => k + 1);
+
+      const labels = dartsToAdd.map((d) => d.label).join(", ");
+      const camSuffix = chosenCamId ? ` (Cam ${chosenCamId})` : "";
+      toast.success(
+        `${toastPrefix} ${dartsToAdd.length} dart${dartsToAdd.length !== 1 ? "s" : ""}: ${labels}${camSuffix}`,
+      );
+    },
+    [leaderboard.length, top3Threshold],
+  );
+
+  const applyDetectionOut = useCallback(
+    (result: DetectionOut, snapshots: (string | null)[], mode: "manual" | "auto", blobs?: (Blob | null)[]) => {
       setLastDetectionResult({
         cameras: result.cameras ?? [],
         chosenCamId: result.chosen_cam_id ?? null,
         snapshots,
+        blobs: blobs ?? snapshots.map(() => null),
       });
 
       const darts: DetectedDartOut[] = result.darts ?? [];
-
       if (darts.length === 0) {
-        // Check if ANY camera detected raw darts (even without calibration)
         const totalRawDarts = (result.cameras ?? []).reduce(
           (sum: number, c: DetectionCameraOut) => sum + (c.darts?.length ?? 0),
           0,
@@ -619,77 +1071,312 @@ function Index() {
         return;
       }
 
-      const scoredDarts = darts.filter((d: DetectedDartOut) => d.score_value != null);
+      const scoredDarts = darts.filter((d) => d.score_value != null);
       if (scoredDarts.length === 0) {
-        toast.warning(
-          `Detected ${darts.length} dart(s) but could not score them — check calibration.`,
-        );
+        toast.warning(`Detected ${darts.length} dart(s) but could not score them — check calibration.`);
         return;
       }
 
-      // Add all detected darts (up to 3 - currentDarts.length remaining slots)
-      const slotsRemaining = 3 - currentDarts.length;
-      const dartsToAdd = scoredDarts.slice(0, slotsRemaining);
-
-      const newDarts: DartThrow[] = [];
-      const newHits: DartBoardHit[] = [];
-
-      for (const dart of dartsToAdd) {
-        const hitPt = segmentHitPoint(
-          dart.segment_id ?? "miss",
-          dart.board_x,
-          dart.board_y,
-        );
-        newDarts.push({ value: dart.score_value!, label: dart.score_label ?? "?" });
-        newHits.push({
-          x: hitPt.x,
-          y: hitPt.y,
-          segmentId: dart.segment_id ?? "miss",
-          value: dart.score_value!,
-          label: dart.score_label ?? "?",
-        });
+      const detected = detectedAutoThrows(result);
+      if (detected.length === 0) {
+        toast.warning("Detected darts but could not map them onto the board — check calibration.");
+        return;
       }
 
-      // Batch update state
-      const allDarts = [...currentDarts, ...newDarts];
-      setCurrentDarts(allDarts);
-      setBoardHits((prev) => [...prev, ...newHits]);
+      const prev = currentDartsRef.current;
+      const { removalDetected, newCandidates } = computeNewAutoThrows(prev, detected);
 
-      // Commentary for the last dart added
-      if (newDarts.length > 0) {
-        const lastDart = newDarts[newDarts.length - 1];
-        if (allDarts.length >= 3) {
-          const total = allDarts.reduce((sum, d) => sum + d.value, 0);
-          setCommentary(getRoundEndComment(total));
-          if (total > top3Threshold || leaderboard.length < 3) {
-            setShowNameInput(true);
-          }
-        } else {
-          setCommentary(getCommentary(lastDart, allDarts.length - 1, allDarts));
-        }
-        setCommentaryKey((k) => k + 1);
+      if (mode === "auto" && removalDetected) {
+        pauseAutoDetect("Dart(s) were removed or moved. Press Reset to continue.");
+        toast.warning("Dart(s) were removed or moved — auto-detection paused. Press Reset to continue.");
+        return;
       }
 
-      const totalDetected = scoredDarts.length;
-      const labels = dartsToAdd.map((d: DetectedDartOut) => d.score_label).join(", ");
-      toast.success(
-        `Detected ${totalDetected} dart${totalDetected !== 1 ? "s" : ""}: ${labels} (Cam ${result.chosen_cam_id})`,
-      );
+      if (newCandidates.length === 0) {
+        if (mode === "manual") toast.info("No new darts to add.");
+        return;
+      }
+
+      appendDarts(newCandidates, result.chosen_cam_id ?? null, mode === "auto" ? "Auto added" : "Added");
+    },
+    [appendDarts, pauseAutoDetect],
+  );
+
+  // ── Manual detection handler ────────────────────────────────────────────
+
+  const handleDetection = useCallback(async () => {
+    if (roundComplete || detecting) return;
+
+    if (!hasAnyCameras) {
+      toast.error("No cameras assigned. Go to Settings to configure cameras.");
+      return;
+    }
+    if (!hasAnyCalibration) {
+      toast.error("No cameras calibrated. Go to Settings → Calibrate at least one camera.");
+      return;
+    }
+
+    setDetecting(true);
+    const safetyTimer = setTimeout(() => {
+      setDetecting(false);
+      toast.error("Detection timed out. Please try again.");
+    }, 60_000);
+
+    try {
+      const { result, snapshots, blobs } = await runDetectionRequest(true);
+      applyDetectionOut(result, snapshots, "manual", blobs);
     } catch (err) {
       console.error("[detection] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         toast.error("Detection timed out. The first run may be slow while the model loads — try again.");
       } else {
-        toast.error(
-          "Detection failed: " +
-            (err instanceof Error ? err.message : "Unknown error"),
-        );
+        toast.error("Detection failed: " + (err instanceof Error ? err.message : "Unknown error"));
       }
     } finally {
       clearTimeout(safetyTimer);
       setDetecting(false);
     }
-  }, [roundComplete, detecting, hasAnyCameras, hasAnyCalibration, slots, currentDarts, top3Threshold, leaderboard.length]);
+  }, [roundComplete, detecting, hasAnyCameras, hasAnyCalibration, runDetectionRequest, applyDetectionOut]);
+
+  // ── Auto detection (motion → settle → detect) ───────────────────────────
+
+  useEffect(() => {
+    const eligible =
+      autoDetectEnabled &&
+      !autoDetectPausedReason &&
+      hasAnyCameras &&
+      hasAnyCalibration;
+
+    if (!eligible) {
+      if (!autoDetectEnabled) setAutoDetectPhase("off");
+      else if (autoDetectPausedReason) setAutoDetectPhase("paused");
+      else setAutoDetectPhase("idle");
+      return;
+    }
+
+    setAutoDetectPhase("idle");
+    let cancelled = false;
+
+    const runPollCycle = async () => {
+      while (!cancelled) {
+        await sleep(AUTO_POLL_INTERVAL_MS);
+        if (cancelled) break;
+        if (autoInFlightRef.current) continue;
+
+        autoInFlightRef.current = true;
+        setAutoDetectPhase("detecting");
+
+        try {
+          const prev = currentDartsRef.current;
+
+          const { result, snapshots } = await runDetectionRequest(true);
+          if (cancelled) break;
+
+          const detected = detectedAutoThrows(result);
+          const { removalDetected, newCandidates } = computeNewAutoThrows(prev, detected);
+
+          const boardChanged =
+            removalDetected ||
+            (prev.length >= 3 && detected.length !== prev.length);
+
+          if (boardChanged) {
+            toast.warning("Board change detected — resetting in 2s…");
+            setAutoDetectPhase("paused");
+            autoInFlightRef.current = false;
+            await sleep(REMOVAL_COOLDOWN_MS);
+            if (cancelled) break;
+            setCurrentDarts([]);
+            setBoardHits([]);
+            setPlayerName("");
+            setShowNameInput(false);
+            setCommentary("Step up to the oche...");
+            setCommentaryKey((k) => k + 1);
+            setLastDetectionResult(null);
+            setAutoDetectPausedReason(null);
+            setAutoDetectPhase("idle");
+            continue;
+          }
+
+          setLastDetectionResult({
+            cameras: result.cameras ?? [],
+            chosenCamId: result.chosen_cam_id ?? null,
+            snapshots,
+            blobs: snapshots.map(() => null),
+          });
+
+          if (newCandidates.length > 0 && prev.length < 3) {
+            appendDarts(newCandidates.slice(0, 1), result.chosen_cam_id ?? null, "Auto added");
+          }
+        } catch (err) {
+          if (cancelled) break;
+          console.error("[auto-detect] Error:", err);
+        } finally {
+          autoInFlightRef.current = false;
+          if (!cancelled) setAutoDetectPhase("idle");
+        }
+      }
+    };
+
+    void runPollCycle();
+    return () => { cancelled = true; };
+  }, [
+    autoDetectEnabled,
+    autoDetectPausedReason,
+    hasAnyCameras,
+    hasAnyCalibration,
+    runDetectionRequest,
+    appendDarts,
+  ]);
+
+  // ── Correction callbacks (from CameraDetectionDialog) ──────────────────
+
+  const handleApplyCorrection = useCallback(
+    (dartIndex: number, newScore: { value: number; label: string; segmentId: string; boardX: number; boardY: number }) => {
+      if (!lastDetectionResult) return;
+      const chosenCamId = lastDetectionResult.chosenCamId;
+      const camResult = lastDetectionResult.cameras.find((c) => c.cam_id === chosenCamId);
+      if (!camResult) return;
+
+      const detDart = (camResult.darts ?? [])[dartIndex];
+      if (!detDart) return;
+
+      // Find which round dart this detection dart corresponds to by matching board coords
+      const roundIdx = currentDarts.findIndex(
+        (d) =>
+          d.source === "auto" &&
+          d.boardX != null &&
+          d.boardY != null &&
+          detDart.board_x != null &&
+          detDart.board_y != null &&
+          Math.hypot(d.boardX - detDart.board_x, d.boardY - detDart.board_y) < MATCH_RADIUS_MM,
+      );
+
+      if (roundIdx < 0) {
+        toast.warning("Could not match this dart to a scored round dart.");
+        return;
+      }
+
+      // Update currentDarts
+      setCurrentDarts((prev) => {
+        const next = [...prev];
+        next[roundIdx] = {
+          ...next[roundIdx],
+          value: newScore.value,
+          label: newScore.label,
+          boardX: newScore.boardX,
+          boardY: newScore.boardY,
+          segmentId: newScore.segmentId,
+        };
+        return next;
+      });
+
+      // Update boardHits
+      const hitPt = segmentHitPoint(newScore.segmentId, newScore.boardX, newScore.boardY);
+      setBoardHits((prev) => {
+        const next = [...prev];
+        next[roundIdx] = {
+          x: hitPt.x,
+          y: hitPt.y,
+          segmentId: newScore.segmentId,
+          value: newScore.value,
+          label: newScore.label,
+        };
+        return next;
+      });
+
+      // Update detection result so overlay stays consistent
+      setLastDetectionResult((prev) => {
+        if (!prev) return prev;
+        const cameras = prev.cameras.map((c) => {
+          if (c.cam_id !== chosenCamId) return c;
+          const darts = (c.darts ?? []).map((d, i) => {
+            if (i !== dartIndex) return d;
+            return {
+              ...d,
+              score_value: newScore.value,
+              score_label: newScore.label,
+              segment_id: newScore.segmentId,
+              board_x: newScore.boardX,
+              board_y: newScore.boardY,
+            };
+          });
+          return { ...c, darts };
+        });
+        return { ...prev, cameras };
+      });
+    },
+    [lastDetectionResult, currentDarts],
+  );
+
+  const handleAddToLabelingSet = useCallback(
+    async (
+      camId: number,
+      darts: Array<{ tipX: number; tipY: number; tailX: number; tailY: number; tailVisible: boolean }>,
+    ) => {
+      if (!lastDetectionResult) return;
+
+      const now = new Date();
+      const timestamp = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, "0"),
+        String(now.getDate()).padStart(2, "0"),
+        "_",
+        String(now.getHours()).padStart(2, "0"),
+        String(now.getMinutes()).padStart(2, "0"),
+        String(now.getSeconds()).padStart(2, "0"),
+      ].join("");
+
+      // Upload all 3 camera images as a raw capture
+      const captureForm = new FormData();
+      captureForm.append("timestamp", timestamp);
+      for (let i = 0; i < NUM_CAMERAS; i++) {
+        const blob = lastDetectionResult.blobs[i];
+        if (blob && blob.size > 10) {
+          captureForm.append(`cam${i + 1}`, blob, `cam${i + 1}.jpg`);
+        } else {
+          captureForm.append(`cam${i + 1}`, createPlaceholderBlob(), `cam${i + 1}.jpg`);
+        }
+      }
+
+      const captureRes = await fetch("/api/raw-captures", {
+        method: "POST",
+        body: captureForm,
+      });
+      if (!captureRes.ok) {
+        toast.error("Failed to create raw capture for labeling.");
+        return;
+      }
+
+      // Save labels for the chosen camera
+      const camResult = lastDetectionResult.cameras.find((c) => c.cam_id === camId);
+      const imgW = camResult?.image_width ?? 1280;
+      const imgH = camResult?.image_height ?? 720;
+      const imageFilename = `dart_${timestamp}_cam${camId}.jpg`;
+
+      const labelRes = await fetch("/api/labels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_filename: imageFilename,
+          image_width: imgW,
+          image_height: imgH,
+          darts: darts.map((d) => ({
+            tip: { x: d.tipX, y: d.tipY },
+            tail: { x: d.tailVisible ? d.tailX : 0, y: d.tailVisible ? d.tailY : 0 },
+            tail_visible: d.tailVisible,
+          })),
+        }),
+      });
+
+      if (!labelRes.ok) {
+        toast.error("Capture saved but failed to save labels.");
+        return;
+      }
+
+      toast.success(`Added to labeling set (${timestamp}). Visit Labeling page to review.`);
+    },
+    [lastDetectionResult],
+  );
 
   const handleSaveRound = useCallback(() => {
     if (!playerName.trim()) return;
@@ -705,7 +1392,8 @@ function Index() {
     setCommentary("Step up to the oche...");
     setCommentaryKey((k) => k + 1);
     setLastDetectionResult(null);
-  }, [currentDarts, playerName]);
+    resumeAutoDetect();
+  }, [currentDarts, playerName, resumeAutoDetect]);
 
   const handleReset = useCallback(() => {
     setCurrentDarts([]);
@@ -715,7 +1403,8 @@ function Index() {
     setCommentary("Step up to the oche...");
     setCommentaryKey((k) => k + 1);
     setLastDetectionResult(null);
-  }, []);
+    resumeAutoDetect();
+  }, [resumeAutoDetect]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center px-4 py-8 gap-6 relative">
@@ -759,6 +1448,16 @@ function Index() {
             <MessageSquareOff className="w-4 h-4" />
           )}
         </button>
+        <div className="w-px h-4 bg-border mx-0.5" />
+        <div className="flex items-center gap-1.5 pl-1">
+          <Switch
+            checked={autoDetectEnabled}
+            onCheckedChange={(v) => setAutoDetectEnabled(Boolean(v))}
+          />
+          <span className={`text-[10px] font-semibold ${autoStatus.className}`}>
+            {autoStatus.text}
+          </span>
+        </div>
       </div>
 
       {/* Title */}
@@ -767,7 +1466,7 @@ function Index() {
           Data Intelligence Darts
         </h1>
         <p className="text-xs text-muted-foreground mt-1 tracking-wide">
-          {manualClickEnabled ? "Click the board to throw" : "Waiting for auto-detection..."}
+          Powered by AI
         </p>
       </div>
 
@@ -791,6 +1490,12 @@ function Index() {
 
       {/* Detection button + camera strip */}
       <div className="flex flex-col items-center gap-3 w-full max-w-lg">
+        {autoDetectPausedReason && (
+          <p className="text-[11px] text-amber-600 text-center max-w-[26rem]">
+            {autoDetectPausedReason}
+          </p>
+        )}
+
         <button
           onClick={handleDetection}
           disabled={detecting || roundComplete}
@@ -810,7 +1515,7 @@ function Index() {
         </button>
 
         {/* Mini camera strip */}
-        {hasAnyCameras && (
+        {hasAnyCameras && hasAnyCalibration && (
           <div className="flex gap-2 w-full">
             {slots.map((slot, idx) => {
               const camId = idx + 1;
@@ -877,13 +1582,13 @@ function Index() {
           </div>
         )}
 
-        {!hasAnyCameras && (
+        {!hasAnyCalibration && (
           <p className="text-xs text-muted-foreground">
-            No cameras assigned.{" "}
+            Configure cameras in{" "}
             <Link to="/settings" className="underline hover:text-foreground">
-              Configure cameras
+              Settings
             </Link>{" "}
-            to use detection.
+            first.
           </p>
         )}
       </div>
@@ -950,6 +1655,16 @@ function Index() {
           camResult={lastDetectionResult.cameras.find((c) => c.cam_id === overlayCamera)}
           isChosen={lastDetectionResult.chosenCamId === overlayCamera}
           onClose={() => setOverlayCamera(null)}
+          onNavigate={(dir) => {
+            setOverlayCamera((prev) => {
+              if (prev == null) return null;
+              if (dir === "next") return prev >= NUM_CAMERAS ? 1 : prev + 1;
+              return prev <= 1 ? NUM_CAMERAS : prev - 1;
+            });
+          }}
+          calibrationMatrix={slots[(overlayCamera ?? 1) - 1]?.calibration?.matrix ?? null}
+          onApplyCorrection={handleApplyCorrection}
+          onAddToLabelingSet={handleAddToLabelingSet}
         />
       )}
     </div>

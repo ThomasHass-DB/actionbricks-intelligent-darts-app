@@ -66,6 +66,10 @@ class AppConfig(BaseSettings):
     def calibration_file_path(self) -> Path:
         return project_root / "calibration.json"
 
+    @property
+    def calibration_sets_file_path(self) -> Path:
+        return project_root / "calibration_sets.json"
+
     # ── Detection model ──────────────────────────────────────────────────────
 
     serving_endpoint_name: str | None = Field(

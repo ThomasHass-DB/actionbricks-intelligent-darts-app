@@ -12,6 +12,9 @@ import {
   KeyRound,
   Globe,
   Play,
+  Save,
+  FolderOpen,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CalibrationView } from "@/components/settings/CalibrationView";
@@ -25,6 +28,10 @@ import {
   getCalibration,
   saveCalibration,
   type CalibrationSlotIn,
+  listCalibrationSets,
+  saveCalibrationSet,
+  deleteCalibrationSet,
+  type CalibrationSetOut,
 } from "@/lib/api";
 
 export const Route = createFileRoute("/settings")({
@@ -348,6 +355,17 @@ function Settings() {
   // Which slot index is being calibrated (null = none)
   const [calibratingSlot, setCalibratingSlot] = useState<number | null>(null);
 
+  // Named calibration sets
+  const [calSets, setCalSets] = useState<CalibrationSetOut[]>([]);
+  const [calSetName, setCalSetName] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+
+  useEffect(() => {
+    listCalibrationSets()
+      .then(({ data }) => setCalSets(data.sets ?? []))
+      .catch(() => {});
+  }, []);
+
   // ── Load calibration from backend ─────────────────────────────────────
   useEffect(() => {
     if (calibrationLoaded) return;
@@ -546,6 +564,62 @@ function Settings() {
       setCalibratingSlot(null);
     },
     [calibratingSlot, updateSlot],
+  );
+
+  const handleSaveCalibrationSet = useCallback(async () => {
+    const name = calSetName.trim();
+    if (!name) return;
+    const apiSlots: CalibrationSlotIn[] = slots.map((s) => ({
+      device_id: s.deviceId,
+      device_label: "",
+      points: s.calibration?.points?.map((p: Point) => ({ x: p.x, y: p.y })) ?? [],
+      matrix: s.calibration?.matrix ?? [],
+    }));
+    try {
+      await saveCalibrationSet({ name, slots: apiSlots });
+      const { data } = await listCalibrationSets();
+      setCalSets(data.sets ?? []);
+      setCalSetName("");
+      setShowSaveInput(false);
+      toast.success(`Calibration set "${name}" saved`);
+    } catch {
+      toast.error("Failed to save calibration set");
+    }
+  }, [calSetName, slots]);
+
+  const handleLoadCalibrationSet = useCallback(
+    (set: CalibrationSetOut) => {
+      const loaded: CameraSlot[] = (set.slots ?? []).map((s) => ({
+        deviceId: s.device_id || "",
+        calibration:
+          s.matrix && s.matrix.length > 0
+            ? {
+                points: (s.points ?? []).map((p) => ({ x: p.x, y: p.y })),
+                matrix: s.matrix as Matrix3x3,
+              }
+            : null,
+      }));
+      while (loaded.length < NUM_CAMERAS)
+        loaded.push({ deviceId: "", calibration: null });
+      const final = loaded.slice(0, NUM_CAMERAS);
+      setSlots(final);
+      saveSlots(final);
+      toast.success(`Loaded calibration set "${set.name}"`);
+    },
+    [],
+  );
+
+  const handleDeleteCalibrationSet = useCallback(
+    async (name: string) => {
+      try {
+        const { data } = await deleteCalibrationSet({ set_name: name });
+        setCalSets(data.sets ?? []);
+        toast.success(`Deleted calibration set "${name}"`);
+      } catch {
+        toast.error("Failed to delete calibration set");
+      }
+    },
+    [],
   );
 
   // ── Kinesis video refs (for preview + calibration + snapshot) ─────────
@@ -935,6 +1009,115 @@ function Settings() {
             )}
           </section>
         )}
+
+        {/* ── Calibration Sets ────────────────────────────────────────── */}
+        <section className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-muted-foreground" />
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Calibration Sets
+              </h2>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            {calibratedCount === NUM_CAMERAS && !showSaveInput && (
+              <button
+                onClick={() => setShowSaveInput(true)}
+                className="flex items-center gap-2 h-9 px-4 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Save Current Calibration
+              </button>
+            )}
+
+            {calibratedCount < NUM_CAMERAS && !showSaveInput && (
+              <p className="text-xs text-muted-foreground">
+                Calibrate all {NUM_CAMERAS} cameras to save a calibration set.
+              </p>
+            )}
+
+            {showSaveInput && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={calSetName}
+                  onChange={(e) => setCalSetName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveCalibrationSet()}
+                  placeholder="Calibration set name"
+                  autoFocus
+                  className="flex-1 h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  onClick={handleSaveCalibrationSet}
+                  disabled={!calSetName.trim()}
+                  className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-40 transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSaveInput(false);
+                    setCalSetName("");
+                  }}
+                  className="h-9 px-3 rounded-lg text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {calSets.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  Saved Sets
+                </p>
+                {calSets.map((set) => {
+                  const calCount = (set.slots ?? []).filter(
+                    (s) => s.matrix && s.matrix.length > 0,
+                  ).length;
+                  return (
+                    <div
+                      key={set.name}
+                      className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {set.name}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {calCount} / {NUM_CAMERAS} cameras
+                          {set.created_at && (
+                            <> &middot; {new Date(set.created_at).toLocaleDateString()}</>
+                          )}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleLoadCalibrationSet(set)}
+                        className="h-8 px-3 rounded-lg text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCalibrationSet(set.name)}
+                        className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {calSets.length === 0 && !showSaveInput && calibratedCount === NUM_CAMERAS && (
+              <p className="text-xs text-muted-foreground">
+                No saved sets yet. Save the current calibration to reuse across sessions.
+              </p>
+            )}
+          </div>
+        </section>
 
         {/* ── Status summary ──────────────────────────────────────────── */}
         <div className="mt-6 rounded-xl border border-border bg-card/50 p-4">

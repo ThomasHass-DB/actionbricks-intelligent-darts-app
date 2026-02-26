@@ -90,6 +90,27 @@ class CalibrationDataOut(BaseModel):
     slots: list[CalibrationSlotOut] = Field(default_factory=list)
 
 
+class CalibrationSetIn(BaseModel):
+    """Named calibration set to save."""
+
+    name: str = Field(description="User-chosen name for this calibration set")
+    slots: list[CalibrationSlotIn] = Field(description="Calibration per camera slot (index 0-2)")
+
+
+class CalibrationSetOut(BaseModel):
+    """A saved named calibration set."""
+
+    name: str
+    slots: list[CalibrationSlotOut] = Field(default_factory=list)
+    created_at: str = Field(default="", description="ISO timestamp when saved")
+
+
+class CalibrationSetListOut(BaseModel):
+    """List of all saved calibration sets."""
+
+    sets: list[CalibrationSetOut] = Field(default_factory=list)
+
+
 # ── Data collection / labeling ───────────────────────────────────────────────
 
 

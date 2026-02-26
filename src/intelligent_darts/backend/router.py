@@ -18,6 +18,9 @@ from .dependencies import ConfigDep, RuntimeDep, get_obo_ws
 from .models import (
     CalibrationDataIn,
     CalibrationDataOut,
+    CalibrationSetIn,
+    CalibrationSetListOut,
+    CalibrationSetOut,
     CalibrationSlotOut,
     CameraSettingsIn,
     CameraSettingsOut,
@@ -158,6 +161,75 @@ async def save_calibration(body: CalibrationDataIn, config: ConfigDep) -> Calibr
     )
     path.write_text(_json.dumps(out.model_dump(), indent=2))
     return out
+
+
+# ── Named calibration sets ───────────────────────────────────────────────
+
+from datetime import datetime, timezone
+
+
+def _load_calibration_sets(config: ConfigDep) -> list[dict]:
+    path = config.calibration_sets_file_path
+    if path.exists():
+        try:
+            return _json.loads(path.read_text())
+        except Exception:
+            pass
+    return []
+
+
+def _save_calibration_sets(config: ConfigDep, sets: list[dict]) -> None:
+    config.calibration_sets_file_path.write_text(_json.dumps(sets, indent=2))
+
+
+@api.get(
+    "/calibration/sets",
+    response_model=CalibrationSetListOut,
+    operation_id="listCalibrationSets",
+)
+async def list_calibration_sets(config: ConfigDep) -> CalibrationSetListOut:
+    """List all saved calibration sets."""
+    raw = _load_calibration_sets(config)
+    sets = [CalibrationSetOut(**s) for s in raw]
+    return CalibrationSetListOut(sets=sets)
+
+
+@api.post(
+    "/calibration/sets",
+    response_model=CalibrationSetOut,
+    operation_id="saveCalibrationSet",
+)
+async def save_calibration_set(body: CalibrationSetIn, config: ConfigDep) -> CalibrationSetOut:
+    """Save a named calibration set. Overwrites if the name already exists."""
+    slots = body.slots[:3]
+    while len(slots) < 3:
+        from .models import CalibrationSlotIn
+        slots.append(CalibrationSlotIn())
+
+    out = CalibrationSetOut(
+        name=body.name.strip(),
+        slots=[CalibrationSlotOut(**s.model_dump()) for s in slots],
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    existing = _load_calibration_sets(config)
+    existing = [s for s in existing if s.get("name") != out.name]
+    existing.append(out.model_dump())
+    _save_calibration_sets(config, existing)
+    return out
+
+
+@api.delete(
+    "/calibration/sets/{set_name}",
+    response_model=CalibrationSetListOut,
+    operation_id="deleteCalibrationSet",
+)
+async def delete_calibration_set(set_name: str, config: ConfigDep) -> CalibrationSetListOut:
+    """Delete a named calibration set."""
+    existing = _load_calibration_sets(config)
+    existing = [s for s in existing if s.get("name") != set_name]
+    _save_calibration_sets(config, existing)
+    return CalibrationSetListOut(sets=[CalibrationSetOut(**s) for s in existing])
 
 
 # ── Data collection / labeling ───────────────────────────────────────────────

@@ -1,6 +1,11 @@
 export interface DartThrow {
   value: number;
   label: string;
+  source?: "manual" | "auto";
+  boardX?: number;
+  boardY?: number;
+  segmentId?: string;
+  confidence?: number;
 }
 
 interface ScoreDisplayProps {

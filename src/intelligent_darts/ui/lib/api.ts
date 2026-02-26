@@ -30,6 +30,21 @@ export interface CalibrationPointOut {
   y: number;
 }
 
+export interface CalibrationSetIn {
+  name: string;
+  slots: CalibrationSlotIn[];
+}
+
+export interface CalibrationSetListOut {
+  sets?: CalibrationSetOut[];
+}
+
+export interface CalibrationSetOut {
+  created_at?: string;
+  name: string;
+  slots?: CalibrationSlotOut[];
+}
+
 export interface CalibrationSlotIn {
   device_id?: string;
   device_label?: string;
@@ -223,6 +238,10 @@ export interface ViewerConnectionInfo {
   wss_endpoint: string;
 }
 
+export interface DeleteCalibrationSetParams {
+  set_name: string;
+}
+
 export interface CurrentUserParams {
   "X-Forwarded-Access-Token"?: string | null;
 }
@@ -290,6 +309,59 @@ export const saveCalibration = async (data: CalibrationDataIn, options?: Request
 
 export function useSaveCalibration(options?: { mutation?: UseMutationOptions<{ data: CalibrationDataOut }, ApiError, CalibrationDataIn> }) {
   return useMutation({ mutationFn: (data) => saveCalibration(data), ...options?.mutation });
+}
+
+export const listCalibrationSets = async (options?: RequestInit): Promise<{ data: CalibrationSetListOut }> => {
+  const res = await fetch("/api/calibration/sets", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const listCalibrationSetsKey = () => {
+  return ["/api/calibration/sets"] as const;
+};
+
+export function useListCalibrationSets<TData = { data: CalibrationSetListOut }>(options?: { query?: Omit<UseQueryOptions<{ data: CalibrationSetListOut }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: listCalibrationSetsKey(), queryFn: () => listCalibrationSets(), ...options?.query });
+}
+
+export function useListCalibrationSetsSuspense<TData = { data: CalibrationSetListOut }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: CalibrationSetListOut }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: listCalibrationSetsKey(), queryFn: () => listCalibrationSets(), ...options?.query });
+}
+
+export const saveCalibrationSet = async (data: CalibrationSetIn, options?: RequestInit): Promise<{ data: CalibrationSetOut }> => {
+  const res = await fetch("/api/calibration/sets", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useSaveCalibrationSet(options?: { mutation?: UseMutationOptions<{ data: CalibrationSetOut }, ApiError, CalibrationSetIn> }) {
+  return useMutation({ mutationFn: (data) => saveCalibrationSet(data), ...options?.mutation });
+}
+
+export const deleteCalibrationSet = async (params: DeleteCalibrationSetParams, options?: RequestInit): Promise<{ data: CalibrationSetListOut }> => {
+  const res = await fetch(`/api/calibration/sets/${params.set_name}`, { ...options, method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useDeleteCalibrationSet(options?: { mutation?: UseMutationOptions<{ data: CalibrationSetListOut }, ApiError, { params: DeleteCalibrationSetParams }> }) {
+  return useMutation({ mutationFn: (vars) => deleteCalibrationSet(vars.params), ...options?.mutation });
 }
 
 export const getCameraSettings = async (options?: RequestInit): Promise<{ data: CameraSettingsOut }> => {
