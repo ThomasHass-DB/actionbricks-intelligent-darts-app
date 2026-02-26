@@ -70,6 +70,24 @@ class AppConfig(BaseSettings):
     def calibration_sets_file_path(self) -> Path:
         return project_root / "calibration_sets.json"
 
+    # ── Lakebase (Postgres) persistence ─────────────────────────────────────
+
+    lakebase_project: str | None = Field(
+        default=None,
+        description="Lakebase Autoscaling project ID (e.g. 'intelligent-darts'). "
+        "When set, game scores are persisted to Postgres.",
+    )
+    lakebase_host: str | None = Field(
+        default=None,
+        description="Lakebase endpoint hostname for psycopg connections.",
+    )
+
+    @property
+    def lakebase_endpoint(self) -> str | None:
+        if not self.lakebase_project:
+            return None
+        return f"projects/{self.lakebase_project}/branches/production/endpoints/primary"
+
     # ── Detection model ──────────────────────────────────────────────────────
 
     serving_endpoint_name: str | None = Field(

@@ -15,6 +15,12 @@ resources:
       name: "intelligent-darts"
       description: "intelligent-darts created with apx"
       source_code_path: ./.build
+      config:
+        env:
+          - name: "INTELLIGENT_DARTS_LAKEBASE_PROJECT"
+            value: "intelligent-darts"
+          - name: "INTELLIGENT_DARTS_LAKEBASE_HOST"
+            value: "ep-flat-haze-d16jh93f.database.us-west-2.cloud.databricks.com"
       resources:
         - name: "serving-endpoint"
           description: "Dart pose detection model serving endpoint"

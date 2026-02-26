@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .._metadata import app_name, dist_dir
 from .config import AppConfig
+from .db import DbManager
 from .router import api
 from .runtime import Runtime
 from .utils import add_not_found_handler
@@ -18,10 +19,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting app with configuration:\n{config}")
 
     runtime = Runtime(config)
+    db = DbManager(config)
+
+    if db.enabled:
+        logger.info(f"Lakebase enabled: project={config.lakebase_project} host={config.lakebase_host}")
+    else:
+        logger.info("Lakebase not configured — game scores will not be persisted")
 
     # Store in app.state for access via dependencies
     app.state.config = config
     app.state.runtime = runtime
+    app.state.db = db
 
     yield
 

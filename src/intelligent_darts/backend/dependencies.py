@@ -1,4 +1,7 @@
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
+
+if TYPE_CHECKING:
+    from .db import DbManager
 
 from databricks.sdk import WorkspaceClient
 from fastapi import Depends, Header, Request
@@ -37,6 +40,24 @@ def get_runtime(request: Request) -> Runtime:
 
 
 RuntimeDep = Annotated[Runtime, Depends(get_runtime)]
+
+
+def get_db(request: Request):
+    from .db import DbManager
+
+    if not hasattr(request.app.state, "db"):
+        raise RuntimeError("DbManager not initialized. Ensure app.state.db is set during lifespan startup.")
+    db: DbManager = request.app.state.db
+    if not db.enabled:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="Lakebase not configured (set INTELLIGENT_DARTS_LAKEBASE_PROJECT and INTELLIGENT_DARTS_LAKEBASE_HOST)",
+        )
+    return db
+
+
+DbDep = Annotated[Any, Depends(get_db)]
 
 
 def get_obo_ws(
