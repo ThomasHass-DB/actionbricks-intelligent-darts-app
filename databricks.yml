@@ -21,6 +21,12 @@ resources:
           serving_endpoint:
             name: "dart_pose_detector"
             permission: "CAN_QUERY"
+        - name: "lakebase-sp-secret"
+          description: "Static password for the Lakebase SP PostgreSQL role"
+          secret:
+            scope: "intelligent-darts"
+            key: "lakebase-sp-password"
+            permission: "READ"
 
 targets:
   dev:

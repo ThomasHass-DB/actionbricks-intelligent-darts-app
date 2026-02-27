@@ -10,7 +10,7 @@ from typing import Annotated
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.iam import User as UserOut
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .._metadata import api_prefix
@@ -50,6 +50,7 @@ api = APIRouter(prefix=api_prefix)
 @api.get("/version", response_model=VersionOut, operation_id="version")
 async def version():
     return VersionOut.from_metadata()
+
 
 
 @api.get("/current-user", response_model=UserOut, operation_id="currentUser")

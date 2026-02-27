@@ -81,6 +81,11 @@ class AppConfig(BaseSettings):
         default=None,
         description="Lakebase endpoint hostname for psycopg connections.",
     )
+    lakebase_password: str | None = Field(
+        default=None,
+        description="Static PostgreSQL password for the SP role (from Databricks Secret). "
+        "When set, used instead of generating an OAuth token.",
+    )
 
     @property
     def lakebase_endpoint(self) -> str | None:
