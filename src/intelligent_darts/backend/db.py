@@ -14,10 +14,17 @@ from .logger import logger
 
 _DB_NAME = "databricks_postgres"
 _TOKEN_TTL_SEC = 3300  # refresh ~5 min before the 1-hour expiry
+_MAX_RETRIES = 3
+_RETRY_DELAY_SEC = 1.0
 
 
 class DbManager:
     """Manages a Lakebase Postgres connection with automatic OAuth token refresh.
+
+    Uses keyword-argument connect() (not a connection string) so that the JWT
+    token — which contains '+', '/', '=' chars — is never subject to string parsing.
+
+    Retries up to _MAX_RETRIES times to recover from scale-to-zero wake-ups.
 
     Usage:
         with db.connect() as conn:
@@ -41,9 +48,9 @@ class DbManager:
             self._user = self._ws.current_user.me().user_name
         return self._user
 
-    def _fresh_token(self) -> str:
+    def _fresh_token(self, force: bool = False) -> str:
         now = time.monotonic()
-        if self._token is None or now >= self._token_expires_at:
+        if force or self._token is None or now >= self._token_expires_at:
             endpoint = self.config.lakebase_endpoint
             if not endpoint:
                 raise RuntimeError("Lakebase endpoint not configured (INTELLIGENT_DARTS_LAKEBASE_PROJECT)")
@@ -65,15 +72,28 @@ class DbManager:
         except OSError:
             ip = host
 
-        token = self._fresh_token()
-        user = self._get_user()
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            # Force a fresh token on retry (previous token may have been the issue)
+            token = self._fresh_token(force=(attempt > 0))
+            user = self._get_user()
+            try:
+                # Use keyword arguments — never embed the JWT in a connection string,
+                # as '+', '/', '=' in the token break libpq string parsing.
+                with psycopg.connect(
+                    host=host,
+                    hostaddr=ip,
+                    dbname=_DB_NAME,
+                    user=user,
+                    password=token,
+                    sslmode="require",
+                ) as conn:
+                    yield conn
+                    return
+            except psycopg.OperationalError as exc:
+                last_exc = exc
+                logger.warning(f"Lakebase connect attempt {attempt + 1}/{_MAX_RETRIES} failed: {exc}")
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY_SEC * (attempt + 1))
 
-        conn_str = (
-            f"host={host} hostaddr={ip} "
-            f"dbname={_DB_NAME} "
-            f"user={user} "
-            f"password={token} "
-            f"sslmode=require"
-        )
-        with psycopg.connect(conn_str) as conn:
-            yield conn
+        raise last_exc  # type: ignore[misc]
