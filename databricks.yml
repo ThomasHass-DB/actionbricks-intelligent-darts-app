@@ -1,5 +1,5 @@
 bundle:
-  name: intelligent-darts
+  name: intelligent-darts-joe
 
 sync:
   include:
@@ -7,20 +7,14 @@ sync:
 
 artifacts:
   default:
-    build: uv run apx build
+    build: uv run apx build && python3 scripts/patch_app_yml.py
 
 resources:
   apps:
     intelligent-darts-app:
-      name: "intelligent-darts"
+      name: "intelligent-darts-joe"
       description: "intelligent-darts created with apx"
       source_code_path: ./.build
-      config:
-        env:
-          - name: "INTELLIGENT_DARTS_LAKEBASE_PROJECT"
-            value: "intelligent-darts"
-          - name: "INTELLIGENT_DARTS_LAKEBASE_HOST"
-            value: "ep-flat-haze-d16jh93f.database.us-west-2.cloud.databricks.com"
       resources:
         - name: "serving-endpoint"
           description: "Dart pose detection model serving endpoint"
