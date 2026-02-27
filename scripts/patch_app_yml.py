@@ -6,11 +6,12 @@ from pathlib import Path
 
 APP_YML = Path(__file__).parent.parent / ".build" / "app.yml"
 
+# New env entries — indented to match the existing env list items
 INJECT = """\
-- name: INTELLIGENT_DARTS_LAKEBASE_PROJECT
-  value: intelligent-darts
-- name: INTELLIGENT_DARTS_LAKEBASE_HOST
-  value: ep-flat-haze-d16jh93f.database.us-west-2.cloud.databricks.com"""
+  - name: INTELLIGENT_DARTS_LAKEBASE_PROJECT
+    value: intelligent-darts
+  - name: INTELLIGENT_DARTS_LAKEBASE_HOST
+    value: ep-flat-haze-d16jh93f.database.us-west-2.cloud.databricks.com"""
 
 text = APP_YML.read_text()
 
@@ -18,7 +19,7 @@ text = APP_YML.read_text()
 if "INTELLIGENT_DARTS_LAKEBASE_PROJECT" in text:
     print("app.yml already patched, skipping")
 else:
-    # Insert after the last existing env entry (before 'resources:')
-    text = re.sub(r"(resources:\n)", INJECT + "\n\\1", text, count=1)
+    # Insert the new entries right before the blank line that precedes 'resources:'
+    text = re.sub(r"(\n\nresources:)", "\n" + INJECT + r"\1", text, count=1)
     APP_YML.write_text(text)
     print(f"Patched {APP_YML} with Lakebase env vars")
