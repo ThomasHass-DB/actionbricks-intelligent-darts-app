@@ -188,6 +188,39 @@ class DatasetStatsOut(BaseModel):
 # ── Detection / scoring ──────────────────────────────────────────────────────
 
 
+# ── AI Commentary ──────────────────────────────────────────────────────────
+
+
+class CommentaryModel(str, Enum):
+    gemini_2_5_flash = "gemini-2-5-flash"
+    llama_4_maverick = "llama-4-maverick"
+    gpt_oss_120b = "gpt-oss-120b"
+    claude_3_7_sonnet = "claude-3-7-sonnet"
+
+
+class RoundScoreIn(BaseModel):
+    value: int
+    label: str
+
+
+class CommentaryIn(BaseModel):
+    score_label: str = Field(description="Score label, e.g. T20, D-BULL, MISS")
+    score_value: int = Field(description="Numeric score value")
+    model: CommentaryModel = Field(description="LLM model to use for commentary")
+    round_scores: list[RoundScoreIn] | None = Field(
+        default=None,
+        description="If provided, generate a round summary instead of a single-dart commentary",
+    )
+
+
+class CommentaryOut(BaseModel):
+    commentary: str = Field(description="Generated commentary text")
+    model: str = Field(description="Model used")
+
+
+# ── Detection / scoring ──────────────────────────────────────────────────────
+
+
 class DetectionPointOut(BaseModel):
     """A 2D point in image pixel coordinates."""
 

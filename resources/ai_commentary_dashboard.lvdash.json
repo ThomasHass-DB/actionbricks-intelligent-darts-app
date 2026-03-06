@@ -1,0 +1,994 @@
+{
+  "datasets": [
+    {
+      "name": "response_times",
+      "displayName": "Response Time Stats",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200)\n",
+        "SELECT\n",
+        "  model,\n",
+        "  COUNT(*) as request_count,\n",
+        "  ROUND(AVG(execution_duration_ms), 0) as avg_ms,\n",
+        "  ROUND(PERCENTILE(execution_duration_ms, 0.5), 0) as p50_ms,\n",
+        "  ROUND(PERCENTILE(execution_duration_ms, 0.95), 0) as p95_ms,\n",
+        "  ROUND(MIN(execution_duration_ms), 0) as min_ms,\n",
+        "  ROUND(MAX(execution_duration_ms), 0) as max_ms\n",
+        "FROM all_payloads\n",
+        "GROUP BY model\n",
+        "ORDER BY avg_ms ASC"
+      ]
+    },
+    {
+      "name": "total_requests",
+      "displayName": "Total Requests",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200)\n",
+        "SELECT COUNT(*) as total_requests FROM all_payloads"
+      ]
+    },
+    {
+      "name": "volume_by_model",
+      "displayName": "Request Volume by Model",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200)\n",
+        "SELECT model, COUNT(*) as request_count FROM all_payloads GROUP BY model"
+      ]
+    },
+    {
+      "name": "latency_percentiles",
+      "displayName": "Latency Percentiles",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200),\n",
+        "stats AS (\n",
+        "  SELECT model,\n",
+        "    ROUND(PERCENTILE(execution_duration_ms, 0.5), 0) as p50_ms,\n",
+        "    ROUND(PERCENTILE(execution_duration_ms, 0.95), 0) as p95_ms\n",
+        "  FROM all_payloads GROUP BY model\n",
+        ")\n",
+        "SELECT model, 'P50' as percentile, p50_ms as latency_ms FROM stats\n",
+        "UNION ALL\n",
+        "SELECT model, 'P95' as percentile, p95_ms as latency_ms FROM stats\n",
+        "ORDER BY model, percentile"
+      ]
+    },
+    {
+      "name": "token_usage",
+      "displayName": "Token Usage by Model",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200)\n",
+        "SELECT\n",
+        "  model,\n",
+        "  ROUND(AVG(CAST(get_json_object(response, '$.usage.prompt_tokens') AS INT)), 0) as avg_prompt_tokens,\n",
+        "  ROUND(AVG(CAST(get_json_object(response, '$.usage.completion_tokens') AS INT)), 0) as avg_completion_tokens,\n",
+        "  ROUND(AVG(CAST(get_json_object(response, '$.usage.total_tokens') AS INT)), 0) as avg_total_tokens\n",
+        "FROM all_payloads\n",
+        "GROUP BY model\n",
+        "ORDER BY avg_total_tokens ASC"
+      ]
+    },
+    {
+      "name": "token_usage_unpivot",
+      "displayName": "Token Usage Unpivoted",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200),\n",
+        "stats AS (\n",
+        "  SELECT model,\n",
+        "    ROUND(AVG(CAST(get_json_object(response, '$.usage.prompt_tokens') AS INT)), 0) as prompt_tokens,\n",
+        "    ROUND(AVG(CAST(get_json_object(response, '$.usage.completion_tokens') AS INT)), 0) as completion_tokens\n",
+        "  FROM all_payloads GROUP BY model\n",
+        ")\n",
+        "SELECT model, 'Prompt' as token_type, prompt_tokens as avg_tokens FROM stats\n",
+        "UNION ALL\n",
+        "SELECT model, 'Completion' as token_type, completion_tokens as avg_tokens FROM stats"
+      ]
+    },
+    {
+      "name": "quality_ranking",
+      "displayName": "Quality Ranking by Model",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200),\n",
+        "commentary_extracted AS (\n",
+        "  SELECT model, databricks_request_id,\n",
+        "    get_json_object(request, '$.messages[1].content') as user_prompt,\n",
+        "    CASE\n",
+        "      WHEN get_json_object(response, '$.choices[0].message.content') IS NOT NULL\n",
+        "           AND LEFT(TRIM(get_json_object(response, '$.choices[0].message.content')), 1) != '['\n",
+        "      THEN get_json_object(response, '$.choices[0].message.content')\n",
+        "      ELSE NULL\n",
+        "    END as commentary\n",
+        "  FROM all_payloads\n",
+        "),\n",
+        "scored AS (\n",
+        "  SELECT model, commentary,\n",
+        "    ai_query('databricks-claude-3-7-sonnet',\n",
+        "      CONCAT('Rate this darts commentary on a scale of 1-10 for enthusiasm, wit, and relevance to the score. Return ONLY a single integer between 1 and 10, nothing else. The dart score prompt was: \"', user_prompt, '\". The commentary was: \"', commentary, '\"')\n",
+        "    ) as raw_score\n",
+        "  FROM commentary_extracted\n",
+        "  WHERE commentary IS NOT NULL AND LENGTH(TRIM(commentary)) > 5\n",
+        ")\n",
+        "SELECT model,\n",
+        "  COUNT(*) as rated_responses,\n",
+        "  ROUND(AVG(CAST(REGEXP_EXTRACT(raw_score, '([0-9]+)', 1) AS INT)), 1) as avg_quality_score,\n",
+        "  MIN(CAST(REGEXP_EXTRACT(raw_score, '([0-9]+)', 1) AS INT)) as min_score,\n",
+        "  MAX(CAST(REGEXP_EXTRACT(raw_score, '([0-9]+)', 1) AS INT)) as max_score\n",
+        "FROM scored\n",
+        "WHERE REGEXP_EXTRACT(raw_score, '([0-9]+)', 1) IS NOT NULL\n",
+        "GROUP BY model\n",
+        "ORDER BY avg_quality_score DESC"
+      ]
+    },
+    {
+      "name": "quality_scores",
+      "displayName": "AI Quality Scores",
+      "queryLines": [
+        "WITH all_payloads AS (SELECT 'Gemini 2.5 Flash' as model, databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gemini-2-5-flash_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Llama 4 Maverick', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-llama-4-maverick_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'GPT OSS 120B', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-gpt-oss-120b_payload`\n",
+        "WHERE status_code = 200\n",
+        "UNION ALL\n",
+        "SELECT 'Claude 3.7 Sonnet', databricks_request_id, request_time, status_code, execution_duration_ms, request, response\n",
+        "FROM classic_stable_5aj75r_catalog.intelligent_darts_app.`intelligent_darts_databricks-claude-3-7-sonnet_payload`\n",
+        "WHERE status_code = 200),\n",
+        "commentary_extracted AS (\n",
+        "  SELECT model, databricks_request_id, execution_duration_ms,\n",
+        "    get_json_object(request, '$.messages[1].content') as user_prompt,\n",
+        "    CASE\n",
+        "      WHEN get_json_object(response, '$.choices[0].message.content') IS NOT NULL\n",
+        "           AND LEFT(TRIM(get_json_object(response, '$.choices[0].message.content')), 1) != '['\n",
+        "      THEN get_json_object(response, '$.choices[0].message.content')\n",
+        "      ELSE 'No commentary generated'\n",
+        "    END as commentary\n",
+        "  FROM all_payloads\n",
+        ")\n",
+        "SELECT model, databricks_request_id, user_prompt, commentary, execution_duration_ms,\n",
+        "  ai_query('databricks-claude-3-7-sonnet',\n",
+        "    CONCAT('Rate this darts commentary on a scale of 1-10 for enthusiasm, wit, and relevance. Return ONLY a JSON object with keys: score (integer 1-10), reason (one sentence). The dart score was: \"', user_prompt, '\". The commentary was: \"', commentary, '\"')\n",
+        "  ) as quality_assessment\n",
+        "FROM commentary_extracted\n",
+        "WHERE commentary != 'No commentary generated' AND LENGTH(TRIM(commentary)) > 5"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "ab8ac883",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "total_req_counter",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "total_requests",
+                  "fields": [
+                    {
+                      "name": "total_requests",
+                      "expression": "`total_requests`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_requests",
+                  "displayName": "Total Inference Requests"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Inference Requests"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "volume_pie",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "volume_by_model",
+                  "fields": [
+                    {
+                      "name": "request_count",
+                      "expression": "`request_count`"
+                    },
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "request_count",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Requests"
+                },
+                "color": {
+                  "fieldName": "model",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Model"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Request Distribution by Model"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 4,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "avg_rt_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "response_times",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "avg_ms",
+                      "expression": "`avg_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "model",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y"
+                    }
+                  },
+                  "displayName": "Model"
+                },
+                "y": {
+                  "fieldName": "avg_ms",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg Response Time (ms)"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Response Time Ranking (Avg ms) - Lower is Better"
+              },
+              "mark": {
+                "colors": [
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7",
+                  "#FF3621"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "p50_p95_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "latency_percentiles",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "percentile",
+                      "expression": "`percentile`"
+                    },
+                    {
+                      "name": "latency_ms",
+                      "expression": "`latency_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "model",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Model"
+                },
+                "y": {
+                  "fieldName": "latency_ms",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Latency (ms)"
+                },
+                "color": {
+                  "fieldName": "percentile",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "P50",
+                        "color": "#8BCAE7"
+                      },
+                      {
+                        "value": "P95",
+                        "color": "#FF3621"
+                      }
+                    ]
+                  },
+                  "displayName": "Percentile"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "P50 & P95 Response Times (ms)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 4,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "39df02a1",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "response_times",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "request_count",
+                      "expression": "`request_count`"
+                    },
+                    {
+                      "name": "avg_ms",
+                      "expression": "`avg_ms`"
+                    },
+                    {
+                      "name": "p50_ms",
+                      "expression": "`p50_ms`"
+                    },
+                    {
+                      "name": "p95_ms",
+                      "expression": "`p95_ms`"
+                    },
+                    {
+                      "name": "min_ms",
+                      "expression": "`min_ms`"
+                    },
+                    {
+                      "name": "max_ms",
+                      "expression": "`max_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "model",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "Model",
+                    "displayName": "Model",
+                    "order": 100000,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "request_count",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "title": "Requests",
+                    "displayName": "Requests",
+                    "order": 100001,
+                    "alignContent": "right"
+                  },
+                  {
+                    "fieldName": "avg_ms",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "Avg (ms)",
+                    "displayName": "Avg (ms)",
+                    "order": 100002,
+                    "alignContent": "right",
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "p50_ms",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "P50 (ms)",
+                    "displayName": "P50 (ms)",
+                    "order": 100003,
+                    "alignContent": "right",
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "p95_ms",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "P95 (ms)",
+                    "displayName": "P95 (ms)",
+                    "order": 100004,
+                    "alignContent": "right",
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "min_ms",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "Min (ms)",
+                    "displayName": "Min (ms)",
+                    "order": 100005,
+                    "alignContent": "right",
+                    "numberFormat": "0"
+                  },
+                  {
+                    "fieldName": "max_ms",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "Max (ms)",
+                    "displayName": "Max (ms)",
+                    "order": 100006,
+                    "alignContent": "right",
+                    "numberFormat": "0"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Response Time Stats by Model"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "token_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "token_usage_unpivot",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "token_type",
+                      "expression": "`token_type`"
+                    },
+                    {
+                      "name": "avg_tokens",
+                      "expression": "`avg_tokens`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "model",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Model"
+                },
+                "y": {
+                  "fieldName": "avg_tokens",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg Tokens"
+                },
+                "color": {
+                  "fieldName": "token_type",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Prompt",
+                        "color": "#8BCAE7"
+                      },
+                      {
+                        "value": "Completion",
+                        "color": "#FFAB00"
+                      }
+                    ]
+                  },
+                  "displayName": "Token Type"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Token Usage by Model"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 4
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "dab8be9a",
+      "displayName": "Quality Assessment",
+      "layout": [
+        {
+          "widget": {
+            "name": "quality_rank_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quality_ranking",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "avg_quality_score",
+                      "expression": "`avg_quality_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "model",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "Model"
+                },
+                "y": {
+                  "fieldName": "avg_quality_score",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Avg Quality Score (1-10)"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Commentary Quality Ranking (AI-Judged, Higher is Better)"
+              },
+              "mark": {
+                "colors": [
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7",
+                  "#AB4057"
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "7edf2791",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quality_ranking",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "rated_responses",
+                      "expression": "`rated_responses`"
+                    },
+                    {
+                      "name": "avg_quality_score",
+                      "expression": "`avg_quality_score`"
+                    },
+                    {
+                      "name": "min_score",
+                      "expression": "`min_score`"
+                    },
+                    {
+                      "name": "max_score",
+                      "expression": "`max_score`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "model",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "Model",
+                    "displayName": "Model",
+                    "order": 100000,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "rated_responses",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "title": "Rated Responses",
+                    "displayName": "Rated Responses",
+                    "order": 100001,
+                    "alignContent": "right"
+                  },
+                  {
+                    "fieldName": "avg_quality_score",
+                    "type": "float",
+                    "displayAs": "number",
+                    "title": "Avg Score (1-10)",
+                    "displayName": "Avg Score (1-10)",
+                    "order": 100002,
+                    "alignContent": "right",
+                    "numberFormat": "0.0"
+                  },
+                  {
+                    "fieldName": "min_score",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "title": "Min Score",
+                    "displayName": "Min Score",
+                    "order": 100003,
+                    "alignContent": "right"
+                  },
+                  {
+                    "fieldName": "max_score",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "title": "Max Score",
+                    "displayName": "Max Score",
+                    "order": 100004,
+                    "alignContent": "right"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Quality Score Summary by Model"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "4db5b965",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quality_scores",
+                  "fields": [
+                    {
+                      "name": "model",
+                      "expression": "`model`"
+                    },
+                    {
+                      "name": "user_prompt",
+                      "expression": "`user_prompt`"
+                    },
+                    {
+                      "name": "commentary",
+                      "expression": "`commentary`"
+                    },
+                    {
+                      "name": "quality_assessment",
+                      "expression": "`quality_assessment`"
+                    },
+                    {
+                      "name": "execution_duration_ms",
+                      "expression": "`execution_duration_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "model",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "Model",
+                    "displayName": "Model",
+                    "order": 100000,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "user_prompt",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "Dart Score",
+                    "displayName": "Dart Score",
+                    "order": 100001,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "commentary",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "Commentary",
+                    "displayName": "Commentary",
+                    "order": 100002,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "quality_assessment",
+                    "type": "string",
+                    "displayAs": "string",
+                    "title": "AI Quality Assessment",
+                    "displayName": "AI Quality Assessment",
+                    "order": 100003,
+                    "alignContent": "left"
+                  },
+                  {
+                    "fieldName": "execution_duration_ms",
+                    "type": "integer",
+                    "displayAs": "number",
+                    "title": "Response Time (ms)",
+                    "displayName": "Response Time (ms)",
+                    "order": 100004,
+                    "alignContent": "right"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Individual Commentary Quality Assessments (Judged by Claude 3.7 Sonnet)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
