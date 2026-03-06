@@ -311,6 +311,25 @@ class LeaderboardOut(BaseModel):
     best_round: int
 
 
+class SegmentHitOut(BaseModel):
+    segment: str
+    count: int
+
+
+class ScoreBucketOut(BaseModel):
+    bucket: str
+    count: int
+
+
+class StatsOut(BaseModel):
+    total_players: int
+    total_rounds: int
+    avg_round_score: float
+    best_round_ever: int
+    top_segments: list[SegmentHitOut]
+    score_distribution: list[ScoreBucketOut]
+
+
 class DetectionEventIn(BaseModel):
     """Log a raw detection result for ML feedback. Set was_corrected=True + corrected_* when player overrides."""
 

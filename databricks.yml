@@ -1,5 +1,5 @@
 bundle:
-  name: intelligent-darts-joe
+  name: intelligent-darts
 
 sync:
   include:
@@ -12,7 +12,7 @@ artifacts:
 resources:
   apps:
     intelligent-darts-app:
-      name: "intelligent-darts-joe"
+      name: "intelligent-darts"
       description: "intelligent-darts created with apx"
       source_code_path: ./.build
       resources:

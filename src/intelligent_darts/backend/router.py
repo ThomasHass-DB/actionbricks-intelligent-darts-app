@@ -40,6 +40,9 @@ from .models import (
     SaveLabelsIn,
     SaveLabelsOut,
     SaveTurnIn,
+    ScoreBucketOut,
+    SegmentHitOut,
+    StatsOut,
     TurnOut,
     VersionOut,
 )
@@ -755,6 +758,85 @@ def get_leaderboard(db: DbDep) -> list[LeaderboardOut]:
             """)
             rows = cur.fetchall()
     return [LeaderboardOut(player_name=r[0], total_score=r[1], rounds_played=r[2], best_round=r[3]) for r in rows]
+
+
+@api.get("/stats", response_model=StatsOut, operation_id="getStats")
+def get_stats(db: DbDep) -> StatsOut:
+    """Aggregate stats for the dashboard: summary numbers, score distribution, top segments."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    (SELECT COUNT(DISTINCT id) FROM players)                          AS total_players,
+                    (SELECT COUNT(DISTINCT id) FROM turns)                            AS total_rounds,
+                    COALESCE(
+                        (SELECT AVG(rt) FROM (SELECT SUM(score_value) AS rt FROM dart_throws GROUP BY turn_id) s),
+                        0
+                    )                                                                 AS avg_round_score,
+                    COALESCE(
+                        (SELECT MAX(rt) FROM (SELECT SUM(score_value) AS rt FROM dart_throws GROUP BY turn_id) s),
+                        0
+                    )                                                                 AS best_round_ever
+            """)
+            r = cur.fetchone()
+            total_players, total_rounds, avg_round_score, best_round_ever = r
+
+            # Top 8 segments (merge inner/outer singles into one label)
+            cur.execute("""
+                SELECT
+                    CASE
+                        WHEN segment_id LIKE 'is-%' THEN SUBSTRING(segment_id FROM 4)
+                        WHEN segment_id LIKE 'os-%' THEN SUBSTRING(segment_id FROM 4)
+                        ELSE segment_id
+                    END AS seg,
+                    COUNT(*) AS cnt
+                FROM dart_throws
+                WHERE segment_id IS NOT NULL AND segment_id <> 'miss'
+                GROUP BY seg
+                ORDER BY cnt DESC
+                LIMIT 8
+            """)
+            top_segments = [SegmentHitOut(segment=r[0], count=r[1]) for r in cur.fetchall()]
+
+            # Score distribution across all rounds
+            cur.execute("""
+                SELECT bucket, sort_order, COUNT(*) AS cnt
+                FROM (
+                    SELECT
+                        CASE
+                            WHEN COALESCE(rt, 0) < 30  THEN '0–29'
+                            WHEN rt < 60               THEN '30–59'
+                            WHEN rt < 90               THEN '60–89'
+                            WHEN rt < 120              THEN '90–119'
+                            ELSE                            '120+'
+                        END AS bucket,
+                        CASE
+                            WHEN COALESCE(rt, 0) < 30  THEN 1
+                            WHEN rt < 60               THEN 2
+                            WHEN rt < 90               THEN 3
+                            WHEN rt < 120              THEN 4
+                            ELSE                            5
+                        END AS sort_order
+                    FROM (
+                        SELECT t.id, SUM(dt.score_value) AS rt
+                        FROM turns t
+                        LEFT JOIN dart_throws dt ON dt.turn_id = t.id
+                        GROUP BY t.id
+                    ) sub
+                ) dist
+                GROUP BY bucket, sort_order
+                ORDER BY sort_order
+            """)
+            score_distribution = [ScoreBucketOut(bucket=r[0], count=r[2]) for r in cur.fetchall()]
+
+    return StatsOut(
+        total_players=int(total_players),
+        total_rounds=int(total_rounds),
+        avg_round_score=round(float(avg_round_score), 1),
+        best_round_ever=int(best_round_ever),
+        top_segments=top_segments,
+        score_distribution=score_distribution,
+    )
 
 
 # ── Detection events (ML feedback) ───────────────────────────────────────────
