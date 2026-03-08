@@ -10,11 +10,11 @@ from typing import Annotated
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.iam import User as UserOut
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .._metadata import api_prefix
-from .dependencies import ConfigDep, RuntimeDep, get_obo_ws
+from .dependencies import ConfigDep, DbDep, RuntimeDep, get_obo_ws
 from .models import (
     CalibrationDataIn,
     CalibrationDataOut,
@@ -29,11 +29,23 @@ from .models import (
     CreateCaptureOut,
     DatasetStatsOut,
     DeleteCaptureOut,
+    DetectionEventIn,
     DetectionOut,
+    DartThrowOut,
+    GameIn,
+    GameOut,
+    LeaderboardOut,
+    PlayerIn,
+    PlayerOut,
     RawCaptureGroupOut,
     RawCaptureListOut,
     SaveLabelsIn,
     SaveLabelsOut,
+    SaveTurnIn,
+    ScoreBucketOut,
+    SegmentHitOut,
+    StatsOut,
+    TurnOut,
     VersionOut,
 )
 
@@ -43,6 +55,7 @@ api = APIRouter(prefix=api_prefix)
 @api.get("/version", response_model=VersionOut, operation_id="version")
 async def version():
     return VersionOut.from_metadata()
+
 
 
 @api.get("/current-user", response_model=UserOut, operation_id="currentUser")
@@ -673,3 +686,270 @@ async def run_detection_endpoint(
     else:
         model = runtime.get_detection_model()
         return run_detection(images, calibrations, model=model)
+
+
+# ── Players ───────────────────────────────────────────────────────────────────
+
+
+@api.post("/players", response_model=PlayerOut, operation_id="createPlayer")
+def create_player(body: PlayerIn, db: DbDep) -> PlayerOut:
+    """Create a player (idempotent — returns existing player if name already exists)."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO players (name) VALUES (%s) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id, name, created_at",
+                (body.name.strip(),),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return PlayerOut(id=row[0], name=row[1], created_at=row[2].isoformat())
+
+
+@api.get("/players", response_model=list[PlayerOut], operation_id="listPlayers")
+def list_players(db: DbDep) -> list[PlayerOut]:
+    """List all players."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, created_at FROM players ORDER BY name")
+            rows = cur.fetchall()
+    return [PlayerOut(id=r[0], name=r[1], created_at=r[2].isoformat()) for r in rows]
+
+
+# ── Games ─────────────────────────────────────────────────────────────────────
+
+
+@api.post("/games", response_model=GameOut, operation_id="createGame")
+def create_game(body: GameIn, db: DbDep) -> GameOut:
+    """Start a new game and upsert all players."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            # Create game
+            cur.execute(
+                "INSERT INTO games (game_mode) VALUES (%s) RETURNING id, game_mode, started_at",
+                (body.game_mode,),
+            )
+            game_id, game_mode, started_at = cur.fetchone()
+
+            # Upsert players and link to game
+            players: list[PlayerOut] = []
+            for order, name in enumerate(body.player_names):
+                cur.execute(
+                    "INSERT INTO players (name) VALUES (%s) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id, name, created_at",
+                    (name.strip(),),
+                )
+                pid, pname, pcreated = cur.fetchone()
+                cur.execute(
+                    "INSERT INTO game_players (game_id, player_id, turn_order) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                    (game_id, pid, order),
+                )
+                players.append(PlayerOut(id=pid, name=pname, created_at=pcreated.isoformat()))
+        conn.commit()
+    return GameOut(id=game_id, game_mode=game_mode, started_at=started_at.isoformat(), players=players)
+
+
+@api.post("/games/{game_id}/end", response_model=GameOut, operation_id="endGame")
+def end_game(game_id: int, db: DbDep) -> GameOut:
+    """Mark a game as finished."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE games SET ended_at = NOW() WHERE id = %s RETURNING id, game_mode, started_at, ended_at",
+                (game_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
+            cur.execute(
+                "SELECT p.id, p.name, p.created_at FROM players p JOIN game_players gp ON gp.player_id = p.id WHERE gp.game_id = %s ORDER BY gp.turn_order",
+                (game_id,),
+            )
+            players = [PlayerOut(id=r[0], name=r[1], created_at=r[2].isoformat()) for r in cur.fetchall()]
+        conn.commit()
+    return GameOut(id=row[0], game_mode=row[1], started_at=row[2].isoformat(), ended_at=row[3].isoformat() if row[3] else None, players=players)
+
+
+# ── Turns & throws ────────────────────────────────────────────────────────────
+
+
+@api.post("/games/{game_id}/turns", response_model=TurnOut, operation_id="saveTurn")
+def save_turn(game_id: int, body: SaveTurnIn, db: DbDep) -> TurnOut:
+    """Save a complete turn (up to 3 dart throws) for a player in a game."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            # Create turn
+            cur.execute(
+                "INSERT INTO turns (game_id, player_id, round_number) VALUES (%s, %s, %s) RETURNING id, started_at",
+                (game_id, body.player_id, body.round_number),
+            )
+            turn_id, started_at = cur.fetchone()
+
+            # Insert throws
+            throws: list[DartThrowOut] = []
+            for t in body.throws:
+                cur.execute(
+                    """INSERT INTO dart_throws
+                       (turn_id, throw_number, score_value, score_label, segment_id,
+                        board_x, board_y, source, confidence, chosen_cam_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id, throw_number, score_value, score_label, segment_id,
+                                 board_x, board_y, source, confidence, chosen_cam_id, thrown_at""",
+                    (turn_id, t.throw_number, t.score_value, t.score_label, t.segment_id,
+                     t.board_x, t.board_y, t.source, t.confidence, t.chosen_cam_id),
+                )
+                r = cur.fetchone()
+                throws.append(DartThrowOut(
+                    id=r[0], throw_number=r[1], score_value=r[2], score_label=r[3],
+                    segment_id=r[4], board_x=r[5], board_y=r[6], source=r[7],
+                    confidence=r[8], chosen_cam_id=r[9], thrown_at=r[10].isoformat(),
+                ))
+
+            # Close the turn
+            cur.execute(
+                "UPDATE turns SET ended_at = NOW() WHERE id = %s RETURNING ended_at",
+                (turn_id,),
+            )
+            ended_at = cur.fetchone()[0]
+
+            # Get player name
+            cur.execute("SELECT name FROM players WHERE id = %s", (body.player_id,))
+            player_name = cur.fetchone()[0]
+        conn.commit()
+    return TurnOut(
+        id=turn_id, game_id=game_id, player_id=body.player_id, player_name=player_name,
+        round_number=body.round_number, started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat() if ended_at else None, throws=throws,
+    )
+
+
+# ── Leaderboard ───────────────────────────────────────────────────────────────
+
+
+@api.get("/leaderboard", response_model=list[LeaderboardOut], operation_id="getLeaderboard")
+def get_leaderboard(db: DbDep) -> list[LeaderboardOut]:
+    """All-time leaderboard: total score, rounds played, best single round per player."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    p.name,
+                    COALESCE(SUM(dt.score_value), 0)   AS total_score,
+                    COUNT(DISTINCT t.id)                AS rounds_played,
+                    COALESCE(MAX(round_scores.round_total), 0) AS best_round
+                FROM players p
+                LEFT JOIN turns t ON t.player_id = p.id
+                LEFT JOIN dart_throws dt ON dt.turn_id = t.id
+                LEFT JOIN (
+                    SELECT turn_id, SUM(score_value) AS round_total
+                    FROM dart_throws
+                    GROUP BY turn_id
+                ) round_scores ON round_scores.turn_id = t.id
+                GROUP BY p.id, p.name
+                ORDER BY total_score DESC
+                LIMIT 50
+            """)
+            rows = cur.fetchall()
+    return [LeaderboardOut(player_name=r[0], total_score=r[1], rounds_played=r[2], best_round=r[3]) for r in rows]
+
+
+@api.get("/stats", response_model=StatsOut, operation_id="getStats")
+def get_stats(db: DbDep) -> StatsOut:
+    """Aggregate stats for the dashboard: summary numbers, score distribution, top segments."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    (SELECT COUNT(DISTINCT id) FROM players)                          AS total_players,
+                    (SELECT COUNT(DISTINCT id) FROM turns)                            AS total_rounds,
+                    COALESCE(
+                        (SELECT AVG(rt) FROM (SELECT SUM(score_value) AS rt FROM dart_throws GROUP BY turn_id) s),
+                        0
+                    )                                                                 AS avg_round_score,
+                    COALESCE(
+                        (SELECT MAX(rt) FROM (SELECT SUM(score_value) AS rt FROM dart_throws GROUP BY turn_id) s),
+                        0
+                    )                                                                 AS best_round_ever
+            """)
+            r = cur.fetchone()
+            total_players, total_rounds, avg_round_score, best_round_ever = r
+
+            # Top 8 segments (merge inner/outer singles into one label)
+            cur.execute("""
+                SELECT
+                    CASE
+                        WHEN segment_id LIKE 'is-%' THEN SUBSTRING(segment_id FROM 4)
+                        WHEN segment_id LIKE 'os-%' THEN SUBSTRING(segment_id FROM 4)
+                        ELSE segment_id
+                    END AS seg,
+                    COUNT(*) AS cnt
+                FROM dart_throws
+                WHERE segment_id IS NOT NULL AND segment_id <> 'miss'
+                GROUP BY seg
+                ORDER BY cnt DESC
+                LIMIT 8
+            """)
+            top_segments = [SegmentHitOut(segment=r[0], count=r[1]) for r in cur.fetchall()]
+
+            # Score distribution across all rounds
+            cur.execute("""
+                SELECT bucket, sort_order, COUNT(*) AS cnt
+                FROM (
+                    SELECT
+                        CASE
+                            WHEN COALESCE(rt, 0) < 30  THEN '0–29'
+                            WHEN rt < 60               THEN '30–59'
+                            WHEN rt < 90               THEN '60–89'
+                            WHEN rt < 120              THEN '90–119'
+                            ELSE                            '120+'
+                        END AS bucket,
+                        CASE
+                            WHEN COALESCE(rt, 0) < 30  THEN 1
+                            WHEN rt < 60               THEN 2
+                            WHEN rt < 90               THEN 3
+                            WHEN rt < 120              THEN 4
+                            ELSE                            5
+                        END AS sort_order
+                    FROM (
+                        SELECT t.id, SUM(dt.score_value) AS rt
+                        FROM turns t
+                        LEFT JOIN dart_throws dt ON dt.turn_id = t.id
+                        GROUP BY t.id
+                    ) sub
+                ) dist
+                GROUP BY bucket, sort_order
+                ORDER BY sort_order
+            """)
+            score_distribution = [ScoreBucketOut(bucket=r[0], count=r[2]) for r in cur.fetchall()]
+
+    return StatsOut(
+        total_players=int(total_players),
+        total_rounds=int(total_rounds),
+        avg_round_score=round(float(avg_round_score), 1),
+        best_round_ever=int(best_round_ever),
+        top_segments=top_segments,
+        score_distribution=score_distribution,
+    )
+
+
+# ── Detection events (ML feedback) ───────────────────────────────────────────
+
+
+@api.post("/detection-events", status_code=201, operation_id="logDetectionEvent")
+def log_detection_event(body: DetectionEventIn, db: DbDep) -> dict:
+    """Log a raw detection result. Use was_corrected=true when a player overrides an auto-score."""
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO detection_events
+                   (cam_id, tip_x, tip_y, board_x, board_y, confidence,
+                    score_value, score_label, segment_id,
+                    was_corrected, corrected_score_value, corrected_score_label)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   RETURNING id""",
+                (body.cam_id, body.tip_x, body.tip_y, body.board_x, body.board_y,
+                 body.confidence, body.score_value, body.score_label, body.segment_id,
+                 body.was_corrected, body.corrected_score_value, body.corrected_score_label),
+            )
+            event_id = cur.fetchone()[0]
+        conn.commit()
+    return {"id": event_id}

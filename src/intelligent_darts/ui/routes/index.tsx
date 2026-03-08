@@ -1,17 +1,25 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { DartBoard } from "@/components/darts/DartBoard";
 import type { DartBoardHit } from "@/components/darts/DartBoard";
 import { ScoreDisplay } from "@/components/darts/ScoreDisplay";
 import type { DartThrow } from "@/components/darts/ScoreDisplay";
 import { Leaderboard } from "@/components/darts/Leaderboard";
-import type { LeaderboardEntry } from "@/components/darts/Leaderboard";
 import { segmentHitPoint } from "@/lib/segment-hitpoint";
 import { scoreFromPixel } from "@/lib/board-scoring";
 import type { Matrix3x3 } from "@/lib/homography";
 import { Link } from "@tanstack/react-router";
 import type { DetectionCameraOut, DetectedDartOut, CameraSettingsOut, DetectionOut } from "@/lib/api";
-import { getCalibration, getCameraSettings, CameraMode } from "@/lib/api";
+import {
+  getCalibration,
+  getCameraSettings,
+  CameraMode,
+  useGetLeaderboard,
+  getLeaderboardKey,
+  createGame,
+  saveTurn,
+} from "@/lib/api";
 import { KinesisCameraFeed } from "@/components/kinesis/KinesisCameraFeed";
 import {
   RotateCcw,
@@ -40,12 +48,6 @@ import { Switch } from "@/components/ui/switch";
 export const Route = createFileRoute("/")({
   component: Index,
 });
-
-const INITIAL_LEADERBOARD: LeaderboardEntry[] = [
-  { name: "Alice", score: 140 },
-  { name: "Bob", score: 121 },
-  { name: "Charlie", score: 95 },
-];
 
 // ── Camera slot types (same as settings/live-feed) ──────────────────────────
 
@@ -698,9 +700,12 @@ function getRoundEndComment(total: number): string {
 // --- Main component ---
 
 function Index() {
+  const queryClient = useQueryClient();
+  const { data: leaderboardRes, isLoading: leaderboardLoading } = useGetLeaderboard();
+  const leaderboard = leaderboardRes?.data ?? [];
+
   const [currentDarts, setCurrentDarts] = useState<DartThrow[]>([]);
   const [boardHits, setBoardHits] = useState<DartBoardHit[]>([]);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(INITIAL_LEADERBOARD);
   const [playerName, setPlayerName] = useState("");
   const [showNameInput, setShowNameInput] = useState(false);
   const [commentary, setCommentary] = useState("Step up to the oche...");
@@ -857,11 +862,6 @@ function Index() {
     ) as Array<Required<Pick<DartThrow, "boardX" | "boardY">> & DartThrow>;
   }
 
-  const top3Threshold = useMemo(() => {
-    const sorted = [...leaderboard].sort((a, b) => b.score - a.score);
-    return sorted.length >= 3 ? sorted[2].score : 0;
-  }, [leaderboard]);
-
   const autoStatus = useMemo(() => {
     if (!autoDetectEnabled) return { text: "Off", className: "text-muted-foreground" };
     if (autoDetectPausedReason) return { text: "Paused", className: "text-amber-500" };
@@ -966,7 +966,7 @@ function Index() {
   const handleScore = useCallback(
     (value: number, label: string, hit: { x: number; y: number; segmentId: string }) => {
       if (roundComplete) return;
-      const newDart: DartThrow = { value, label, source: "manual" };
+      const newDart: DartThrow = { value, label, source: "manual", segmentId: hit.segmentId, boardX: hit.x, boardY: hit.y };
       const next = [...currentDarts, newDart];
       setCurrentDarts(next);
       setBoardHits((prev) => [...prev, { ...hit, value, label }]);
@@ -1471,13 +1471,11 @@ function Index() {
     [lastDetectionResult],
   );
 
-  const handleSaveRound = useCallback(() => {
+  const handleSaveRound = useCallback(async () => {
     if (!playerName.trim()) return;
-    const total = currentDarts.reduce((sum, d) => sum + d.value, 0);
-    setLeaderboard((prev) =>
-      [...prev, { name: playerName.trim(), score: total }]
-        .sort((a, b) => b.score - a.score),
-    );
+    const name = playerName.trim();
+
+    // Reset UI immediately so the player can start the next round
     setCurrentDarts([]);
     setBoardHits([]);
     setPlayerName("");
@@ -1486,7 +1484,30 @@ function Index() {
     setCommentaryKey((k) => k + 1);
     setLastDetectionResult(null);
     resumeAutoDetect();
-  }, [currentDarts, playerName, resumeAutoDetect]);
+
+    try {
+      const { data: game } = await createGame({ player_names: [name], game_mode: "friendly" });
+      const player = game.players?.[0];
+      if (!player) throw new Error("No player returned from createGame");
+
+      const throws = currentDarts.map((dart, i) => ({
+        throw_number: i + 1,
+        score_value: dart.value,
+        score_label: dart.label,
+        board_x: dart.boardX ?? null,
+        board_y: dart.boardY ?? null,
+        source: dart.source ?? "manual",
+        segment_id: dart.segmentId ?? null,
+        confidence: dart.confidence ?? null,
+      }));
+
+      await saveTurn({ game_id: game.id }, { player_id: player.id, round_number: 1, throws });
+      void queryClient.invalidateQueries({ queryKey: getLeaderboardKey() });
+    } catch (err) {
+      console.error("[handleSaveRound]", err);
+      toast.error("Failed to save round to leaderboard.");
+    }
+  }, [currentDarts, playerName, resumeAutoDetect, queryClient]);
 
   const handleReset = useCallback(() => {
     setCurrentDarts([]);
@@ -1503,7 +1524,7 @@ function Index() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center px-4 py-8 gap-6 relative">
       {/* Settings toggles — fixed top right */}
-      <div className="fixed top-4 right-4 z-50 flex items-center gap-1">
+      <div className="fixed top-[52px] right-4 z-50 flex items-center gap-1">
         <Link
           to="/labeling"
           className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
@@ -1811,13 +1832,13 @@ function Index() {
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <RotateCcw className="w-3 h-3" />
-            Score too low for top 3 — try again
+            Reset
           </button>
         )}
       </div>
 
       {/* Leaderboard */}
-      <Leaderboard entries={leaderboard} />
+      <Leaderboard entries={leaderboard} loading={leaderboardLoading} />
 
       {/* Camera detection overlay dialog */}
       {overlayCamera !== null && lastDetectionResult && (

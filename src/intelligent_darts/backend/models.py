@@ -266,3 +266,115 @@ class DetectionOut(BaseModel):
     chosen_cam_id: int | None = Field(default=None, description="Camera that produced the best results")
     darts: list[DetectedDartOut] = Field(default_factory=list, description="All scored darts from the chosen camera")
     cameras: list[DetectionCameraOut] = Field(default_factory=list, description="Per-camera results")
+
+
+# ── Game persistence ──────────────────────────────────────────────────────────
+
+
+class PlayerIn(BaseModel):
+    name: str
+
+
+class PlayerOut(BaseModel):
+    id: int
+    name: str
+    created_at: str
+
+
+class GameIn(BaseModel):
+    game_mode: str = "free"
+    player_names: list[str] = Field(description="Ordered player names; creates player rows if they don't exist yet")
+
+
+class GameOut(BaseModel):
+    id: int
+    game_mode: str
+    started_at: str
+    ended_at: str | None = None
+    players: list[PlayerOut] = Field(default_factory=list)
+
+
+class DartThrowIn(BaseModel):
+    throw_number: int = Field(ge=1, le=3)
+    score_value: int | None = None
+    score_label: str | None = None
+    segment_id: str | None = None
+    board_x: float | None = None
+    board_y: float | None = None
+    source: str = Field(default="manual", pattern="^(manual|auto)$")
+    confidence: float | None = None
+    chosen_cam_id: int | None = None
+
+
+class DartThrowOut(BaseModel):
+    id: int
+    throw_number: int
+    score_value: int | None
+    score_label: str | None
+    segment_id: str | None
+    board_x: float | None
+    board_y: float | None
+    source: str | None
+    confidence: float | None
+    chosen_cam_id: int | None
+    thrown_at: str
+
+
+class TurnOut(BaseModel):
+    id: int
+    game_id: int
+    player_id: int
+    player_name: str
+    round_number: int
+    started_at: str
+    ended_at: str | None
+    throws: list[DartThrowOut] = Field(default_factory=list)
+
+
+class SaveTurnIn(BaseModel):
+    player_id: int
+    round_number: int
+    throws: list[DartThrowIn] = Field(max_length=3)
+
+
+class LeaderboardOut(BaseModel):
+    player_name: str
+    total_score: int
+    rounds_played: int
+    best_round: int
+
+
+class SegmentHitOut(BaseModel):
+    segment: str
+    count: int
+
+
+class ScoreBucketOut(BaseModel):
+    bucket: str
+    count: int
+
+
+class StatsOut(BaseModel):
+    total_players: int
+    total_rounds: int
+    avg_round_score: float
+    best_round_ever: int
+    top_segments: list[SegmentHitOut]
+    score_distribution: list[ScoreBucketOut]
+
+
+class DetectionEventIn(BaseModel):
+    """Log a raw detection result for ML feedback. Set was_corrected=True + corrected_* when player overrides."""
+
+    cam_id: int | None = None
+    tip_x: float | None = None
+    tip_y: float | None = None
+    board_x: float | None = None
+    board_y: float | None = None
+    confidence: float | None = None
+    score_value: int | None = None
+    score_label: str | None = None
+    segment_id: str | None = None
+    was_corrected: bool = False
+    corrected_score_value: int | None = None
+    corrected_score_label: str | None = None

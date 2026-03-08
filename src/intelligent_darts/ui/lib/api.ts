@@ -120,6 +120,32 @@ export interface DartLabelIn {
   tip: KeypointIn;
 }
 
+export interface DartThrowIn {
+  board_x?: number | null;
+  board_y?: number | null;
+  chosen_cam_id?: number | null;
+  confidence?: number | null;
+  score_label?: string | null;
+  score_value?: number | null;
+  segment_id?: string | null;
+  source?: string;
+  throw_number: number;
+}
+
+export interface DartThrowOut {
+  board_x: number | null;
+  board_y: number | null;
+  chosen_cam_id: number | null;
+  confidence: number | null;
+  id: number;
+  score_label: string | null;
+  score_value: number | null;
+  segment_id: string | null;
+  source: string | null;
+  throw_number: number;
+  thrown_at: string;
+}
+
 export interface DatasetStatsOut {
   labeled_images?: number;
   total_captures?: number;
@@ -158,6 +184,21 @@ export interface DetectionCameraOut {
   image_width?: number | null;
 }
 
+export interface DetectionEventIn {
+  board_x?: number | null;
+  board_y?: number | null;
+  cam_id?: number | null;
+  confidence?: number | null;
+  corrected_score_label?: string | null;
+  corrected_score_value?: number | null;
+  score_label?: string | null;
+  score_value?: number | null;
+  segment_id?: string | null;
+  tip_x?: number | null;
+  tip_y?: number | null;
+  was_corrected?: boolean;
+}
+
 export interface DetectionOut {
   cameras?: DetectionCameraOut[];
   chosen_cam_id?: number | null;
@@ -167,6 +208,19 @@ export interface DetectionOut {
 export interface DetectionPointOut {
   x: number;
   y: number;
+}
+
+export interface GameIn {
+  game_mode?: string;
+  player_names: string[];
+}
+
+export interface GameOut {
+  ended_at?: string | null;
+  game_mode: string;
+  id: number;
+  players?: PlayerOut[];
+  started_at: string;
 }
 
 export interface HTTPValidationError {
@@ -188,9 +242,26 @@ export interface KinesisChannelConfig {
   channel_name?: string;
 }
 
+export interface LeaderboardOut {
+  best_round: number;
+  player_name: string;
+  rounds_played: number;
+  total_score: number;
+}
+
 export interface Name {
   family_name?: string | null;
   given_name?: string | null;
+}
+
+export interface PlayerIn {
+  name: string;
+}
+
+export interface PlayerOut {
+  created_at: string;
+  id: number;
+  name: string;
 }
 
 export interface RawCaptureGroupOut {
@@ -221,6 +292,42 @@ export interface SaveLabelsOut {
   label_path: string;
   num_darts: number;
   split: string;
+}
+
+export interface SaveTurnIn {
+  player_id: number;
+  round_number: number;
+  throws: DartThrowIn[];
+}
+
+export interface ScoreBucketOut {
+  bucket: string;
+  count: number;
+}
+
+export interface SegmentHitOut {
+  count: number;
+  segment: string;
+}
+
+export interface StatsOut {
+  avg_round_score: number;
+  best_round_ever: number;
+  score_distribution: ScoreBucketOut[];
+  top_segments: SegmentHitOut[];
+  total_players: number;
+  total_rounds: number;
+}
+
+export interface TurnOut {
+  ended_at: string | null;
+  game_id: number;
+  id: number;
+  player_id: number;
+  player_name: string;
+  round_number: number;
+  started_at: string;
+  throws?: DartThrowOut[];
 }
 
 export interface User {
@@ -270,6 +377,14 @@ export interface DeleteCalibrationSetParams {
 
 export interface CurrentUserParams {
   "X-Forwarded-Access-Token"?: string | null;
+}
+
+export interface EndGameParams {
+  game_id: number;
+}
+
+export interface SaveTurnParams {
+  game_id: number;
 }
 
 export interface GetKinesisViewerConfigParams {
@@ -527,6 +642,66 @@ export function useRunDetection(options?: { mutation?: UseMutationOptions<{ data
   return useMutation({ mutationFn: (data) => runDetection(data), ...options?.mutation });
 }
 
+export const logDetectionEvent = async (data: DetectionEventIn, options?: RequestInit): Promise<{ data: Record<string, unknown> }> => {
+  const res = await fetch("/api/detection-events", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useLogDetectionEvent(options?: { mutation?: UseMutationOptions<{ data: Record<string, unknown> }, ApiError, DetectionEventIn> }) {
+  return useMutation({ mutationFn: (data) => logDetectionEvent(data), ...options?.mutation });
+}
+
+export const createGame = async (data: GameIn, options?: RequestInit): Promise<{ data: GameOut }> => {
+  const res = await fetch("/api/games", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useCreateGame(options?: { mutation?: UseMutationOptions<{ data: GameOut }, ApiError, GameIn> }) {
+  return useMutation({ mutationFn: (data) => createGame(data), ...options?.mutation });
+}
+
+export const endGame = async (params: EndGameParams, options?: RequestInit): Promise<{ data: GameOut }> => {
+  const res = await fetch(`/api/games/${params.game_id}/end`, { ...options, method: "POST" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useEndGame(options?: { mutation?: UseMutationOptions<{ data: GameOut }, ApiError, { params: EndGameParams }> }) {
+  return useMutation({ mutationFn: (vars) => endGame(vars.params), ...options?.mutation });
+}
+
+export const saveTurn = async (params: SaveTurnParams, data: SaveTurnIn, options?: RequestInit): Promise<{ data: TurnOut }> => {
+  const res = await fetch(`/api/games/${params.game_id}/turns`, { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useSaveTurn(options?: { mutation?: UseMutationOptions<{ data: TurnOut }, ApiError, { params: SaveTurnParams; data: SaveTurnIn }> }) {
+  return useMutation({ mutationFn: (vars) => saveTurn(vars.params, vars.data), ...options?.mutation });
+}
+
 export const getKinesisViewerConfig = async (params: GetKinesisViewerConfigParams, options?: RequestInit): Promise<{ data: ViewerConnectionInfo }> => {
   const searchParams = new URLSearchParams();
   if (params.channel_name != null) searchParams.set("channel_name", String(params.channel_name));
@@ -567,6 +742,67 @@ export const saveYoloLabels = async (data: SaveLabelsIn, options?: RequestInit):
 
 export function useSaveYoloLabels(options?: { mutation?: UseMutationOptions<{ data: SaveLabelsOut }, ApiError, SaveLabelsIn> }) {
   return useMutation({ mutationFn: (data) => saveYoloLabels(data), ...options?.mutation });
+}
+
+export const getLeaderboard = async (options?: RequestInit): Promise<{ data: LeaderboardOut[] }> => {
+  const res = await fetch("/api/leaderboard", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const getLeaderboardKey = () => {
+  return ["/api/leaderboard"] as const;
+};
+
+export function useGetLeaderboard<TData = { data: LeaderboardOut[] }>(options?: { query?: Omit<UseQueryOptions<{ data: LeaderboardOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: getLeaderboardKey(), queryFn: () => getLeaderboard(), ...options?.query });
+}
+
+export function useGetLeaderboardSuspense<TData = { data: LeaderboardOut[] }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: LeaderboardOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: getLeaderboardKey(), queryFn: () => getLeaderboard(), ...options?.query });
+}
+
+export const listPlayers = async (options?: RequestInit): Promise<{ data: PlayerOut[] }> => {
+  const res = await fetch("/api/players", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const listPlayersKey = () => {
+  return ["/api/players"] as const;
+};
+
+export function useListPlayers<TData = { data: PlayerOut[] }>(options?: { query?: Omit<UseQueryOptions<{ data: PlayerOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: listPlayersKey(), queryFn: () => listPlayers(), ...options?.query });
+}
+
+export function useListPlayersSuspense<TData = { data: PlayerOut[] }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: PlayerOut[] }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: listPlayersKey(), queryFn: () => listPlayers(), ...options?.query });
+}
+
+export const createPlayer = async (data: PlayerIn, options?: RequestInit): Promise<{ data: PlayerOut }> => {
+  const res = await fetch("/api/players", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useCreatePlayer(options?: { mutation?: UseMutationOptions<{ data: PlayerOut }, ApiError, PlayerIn> }) {
+  return useMutation({ mutationFn: (data) => createPlayer(data), ...options?.mutation });
 }
 
 export const listRawCaptures = async (options?: RequestInit): Promise<{ data: RawCaptureListOut }> => {
@@ -643,6 +879,29 @@ export function useGetRawCaptureImage<TData = { data: unknown }>(options: { para
 
 export function useGetRawCaptureImageSuspense<TData = { data: unknown }>(options: { params: GetRawCaptureImageParams; query?: Omit<UseSuspenseQueryOptions<{ data: unknown }, ApiError, TData>, "queryKey" | "queryFn"> }) {
   return useSuspenseQuery({ queryKey: getRawCaptureImageKey(options.params), queryFn: () => getRawCaptureImage(options.params), ...options?.query });
+}
+
+export const getStats = async (options?: RequestInit): Promise<{ data: StatsOut }> => {
+  const res = await fetch("/api/stats", { ...options, method: "GET" });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export const getStatsKey = () => {
+  return ["/api/stats"] as const;
+};
+
+export function useGetStats<TData = { data: StatsOut }>(options?: { query?: Omit<UseQueryOptions<{ data: StatsOut }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useQuery({ queryKey: getStatsKey(), queryFn: () => getStats(), ...options?.query });
+}
+
+export function useGetStatsSuspense<TData = { data: StatsOut }>(options?: { query?: Omit<UseSuspenseQueryOptions<{ data: StatsOut }, ApiError, TData>, "queryKey" | "queryFn"> }) {
+  return useSuspenseQuery({ queryKey: getStatsKey(), queryFn: () => getStats(), ...options?.query });
 }
 
 export const version = async (options?: RequestInit): Promise<{ data: VersionOut }> => {
