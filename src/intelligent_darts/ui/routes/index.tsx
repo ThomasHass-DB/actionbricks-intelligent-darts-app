@@ -38,6 +38,9 @@ import {
   Check,
   Database,
   Trash2,
+  Sparkles,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
@@ -709,6 +712,14 @@ function Index() {
   const [commentaryVisible, setCommentaryVisible] = useState(true);
   const [commentaryKey, setCommentaryKey] = useState(0);
   const [manualClickEnabled, setManualClickEnabled] = useState(true);
+
+  // ── AI Commentary state ──────────────────────────────────────────────────
+  const [aiCommentaryEnabled, setAiCommentaryEnabled] = useState(false);
+  const [aiModel, setAiModel] = useState("gemini-2-5-flash");
+  const [aiCommentary, setAiCommentary] = useState<string | null>(null);
+  const [aiCommentaryLoading, setAiCommentaryLoading] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [ttsTone, setTtsTone] = useState<"enthusiastic" | "warm">("enthusiastic");
   const [detecting, setDetecting] = useState(false);
 
   const [autoDetectEnabled, setAutoDetectEnabled] = useState<boolean>(() => {
@@ -874,6 +885,84 @@ function Index() {
     autoDetectPhase,
   ]);
 
+  // ── AI Commentary helpers ────────────────────────────────────────────────
+
+  // Preload voices — Chrome loads them asynchronously
+  const [voicesReady, setVoicesReady] = useState(false);
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) setVoicesReady(true);
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, []);
+
+  const speakText = useCallback(
+    (text: string) => {
+      if (!ttsEnabled || !("speechSynthesis" in window)) return;
+      // Chrome bug: synth can get "stuck" — cancel + resume to unstick
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      // Pick an English voice if available
+      const voices = window.speechSynthesis.getVoices();
+      const englishVoice = voices.find((v) => v.lang.startsWith("en") && v.default)
+        || voices.find((v) => v.lang.startsWith("en"));
+      if (englishVoice) utterance.voice = englishVoice;
+      if (ttsTone === "enthusiastic") {
+        utterance.pitch = 1.2;
+        utterance.rate = 1.3;
+      } else {
+        utterance.pitch = 1.0;
+        utterance.rate = 0.9;
+      }
+      utterance.volume = 1;
+      window.speechSynthesis.speak(utterance);
+    },
+    [ttsEnabled, ttsTone, voicesReady],
+  );
+
+  const fetchAiCommentary = useCallback(
+    async (
+      scoreLabel: string,
+      scoreValue: number,
+      roundScores?: { value: number; label: string }[],
+    ) => {
+      if (!aiCommentaryEnabled) return;
+      setAiCommentaryLoading(true);
+      try {
+        const payload: Record<string, unknown> = {
+          score_label: scoreLabel,
+          score_value: scoreValue,
+          model: aiModel,
+        };
+        if (roundScores) {
+          payload.round_scores = roundScores.map((s) => ({
+            value: s.value,
+            label: s.label,
+          }));
+        }
+        const res = await fetch("/api/commentary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setAiCommentary(data.commentary);
+          speakText(data.commentary);
+        }
+      } catch {
+        /* fail silently — static commentary still shows */
+      } finally {
+        setAiCommentaryLoading(false);
+      }
+    },
+    [aiCommentaryEnabled, aiModel, speakText],
+  );
+
   const handleScore = useCallback(
     (value: number, label: string, hit: { x: number; y: number; segmentId: string }) => {
       if (roundComplete) return;
@@ -886,13 +975,17 @@ function Index() {
       if (next.length >= 3) {
         const total = next.reduce((sum, d) => sum + d.value, 0);
         setCommentary(getRoundEndComment(total));
-        setShowNameInput(true);
+        fetchAiCommentary(label, value, next.map((d) => ({ value: d.value, label: d.label })));
+        if (total > top3Threshold || leaderboard.length < 3) {
+          setShowNameInput(true);
+        }
       } else {
         setCommentary(dartComment);
+        fetchAiCommentary(label, value);
       }
       setCommentaryKey((k) => k + 1);
     },
-    [currentDarts, roundComplete],
+    [currentDarts, roundComplete, top3Threshold, leaderboard.length, fetchAiCommentary],
   );
 
   // ── Detection helpers ───────────────────────────────────────────────────
@@ -1027,9 +1120,13 @@ function Index() {
       if (allDarts.length >= 3) {
         const total = allDarts.reduce((sum, d) => sum + d.value, 0);
         setCommentary(getRoundEndComment(total));
-        setShowNameInput(true);
+        fetchAiCommentary(lastDart.label, lastDart.value, allDarts.map((d) => ({ value: d.value, label: d.label })));
+        if (total > top3Threshold || leaderboard.length < 3) {
+          setShowNameInput(true);
+        }
       } else {
         setCommentary(getCommentary(lastDart, allDarts.length - 1, allDarts));
+        fetchAiCommentary(lastDart.label, lastDart.value);
       }
       setCommentaryKey((k) => k + 1);
 
@@ -1039,7 +1136,7 @@ function Index() {
         `${toastPrefix} ${dartsToAdd.length} dart${dartsToAdd.length !== 1 ? "s" : ""}: ${labels}${camSuffix}`,
       );
     },
-    [],
+    [leaderboard.length, top3Threshold, fetchAiCommentary],
   );
 
   const applyDetectionOut = useCallback(
@@ -1418,6 +1515,7 @@ function Index() {
     setPlayerName("");
     setShowNameInput(false);
     setCommentary("Step up to the oche...");
+    setAiCommentary(null);
     setCommentaryKey((k) => k + 1);
     setLastDetectionResult(null);
     resumeAutoDetect();
@@ -1490,17 +1588,95 @@ function Index() {
       {/* Score display */}
       <ScoreDisplay darts={currentDarts} />
 
-      {/* Commentary */}
-      <div className="h-6 flex items-center justify-center">
-        {commentaryVisible && (
-          <p
-            key={commentaryKey}
-            className="text-sm italic text-muted-foreground text-center animate-in fade-in duration-300"
-          >
-            {commentary}
-          </p>
+      {/* AI Commentary controls */}
+      <div className="flex flex-col items-center gap-2 w-full max-w-lg">
+        <div className="flex items-center gap-3 flex-wrap justify-center">
+          <div className="flex items-center gap-1.5">
+            <Switch
+              checked={aiCommentaryEnabled}
+              onCheckedChange={(v) => {
+                setAiCommentaryEnabled(Boolean(v));
+                if (!v) setAiCommentary(null);
+              }}
+            />
+            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            <span className="text-[11px] font-medium text-muted-foreground">AI Commentary</span>
+          </div>
+
+          {aiCommentaryEnabled && (
+            <>
+              <select
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                className="h-7 rounded-md border border-border bg-card/60 px-2 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="gemini-2-5-flash">Gemini 2.5 Flash</option>
+                <option value="llama-4-maverick">Llama 4 Maverick</option>
+                <option value="gpt-oss-120b">GPT OSS 120B</option>
+                <option value="claude-3-7-sonnet">Claude 3.7 Sonnet</option>
+              </select>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    setTtsEnabled((prev) => {
+                      const next = !prev;
+                      // Warm-up: speak a silent utterance on user gesture to unlock
+                      // Chrome's speech synthesis for subsequent async calls
+                      if (next && "speechSynthesis" in window) {
+                        const warmup = new SpeechSynthesisUtterance("");
+                        warmup.volume = 0;
+                        window.speechSynthesis.speak(warmup);
+                      }
+                      return next;
+                    });
+                  }}
+                  className={`p-1.5 rounded-md transition-colors ${ttsEnabled ? "text-amber-500 bg-amber-500/10" : "text-muted-foreground hover:text-foreground"}`}
+                  title={ttsEnabled ? "TTS ON" : "TTS OFF"}
+                >
+                  {ttsEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                </button>
+                {ttsEnabled && (
+                  <select
+                    value={ttsTone}
+                    onChange={(e) => setTtsTone(e.target.value as "enthusiastic" | "warm")}
+                    className="h-7 rounded-md border border-border bg-card/60 px-2 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="enthusiastic">Enthusiastic</option>
+                    <option value="warm">Warm & Friendly</option>
+                  </select>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* AI Commentary text */}
+        {aiCommentaryEnabled && (aiCommentary || aiCommentaryLoading) && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <Sparkles className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+            {aiCommentaryLoading ? (
+              <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin" />
+            ) : (
+              <p className="text-sm font-medium text-amber-200 italic">{aiCommentary}</p>
+            )}
+          </div>
         )}
       </div>
+
+      {/* Static commentary — hidden when AI commentary is active */}
+      {!aiCommentaryEnabled && (
+        <div className="h-6 flex items-center justify-center">
+          {commentaryVisible && (
+            <p
+              key={commentaryKey}
+              className="text-sm italic text-muted-foreground text-center animate-in fade-in duration-300"
+            >
+              {commentary}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Dartboard */}
       <DartBoard onScore={handleScore} disabled={roundComplete || !manualClickEnabled} hits={boardHits} />

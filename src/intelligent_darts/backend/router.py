@@ -24,6 +24,8 @@ from .models import (
     CalibrationSlotOut,
     CameraSettingsIn,
     CameraSettingsOut,
+    CommentaryIn,
+    CommentaryOut,
     CreateCaptureOut,
     DatasetStatsOut,
     DeleteCaptureOut,
@@ -551,6 +553,96 @@ async def export_dataset(config: ConfigDep):
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=darts_dataset.zip"},
     )
+
+
+# ── AI Commentary ─────────────────────────────────────────────────────────────
+
+_COMMENTARY_ENDPOINT_MAP = {
+    "gemini-2-5-flash": "intelligent_darts_databricks-gemini-2-5-flash",
+    "llama-4-maverick": "intelligent_darts_databricks-llama-4-maverick",
+    "gpt-oss-120b": "intelligent_darts_databricks-gpt-oss-120b",
+    "claude-3-7-sonnet": "intelligent_darts_databricks-claude-3-7-sonnet",
+}
+
+_COMMENTARY_SYSTEM_PROMPT = (
+    "You are an enthusiastic, witty professional darts commentator. "
+    "Generate exactly ONE short, catchy sentence of commentary for the dart score provided. "
+    "Be energetic and entertaining. Keep it under 20 words. "
+    "If the score is D-BULL or 50 points with label D-BULL, you MUST mention BULL'S EYE. "
+    "Do not use quotation marks around your response."
+)
+
+
+@api.post(
+    "/commentary",
+    response_model=CommentaryOut,
+    operation_id="generateCommentary",
+)
+async def generate_commentary(body: CommentaryIn, runtime: RuntimeDep) -> CommentaryOut:
+    """Generate AI commentary for a dart score using a Foundation Model API endpoint."""
+    from fastapi import HTTPException
+
+    from .logger import logger as _logger
+
+    endpoint_name = _COMMENTARY_ENDPOINT_MAP.get(body.model.value)
+    if not endpoint_name:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {body.model.value}")
+
+    if body.round_scores:
+        scores_text = ", ".join(f"{s.label} ({s.value})" for s in body.round_scores)
+        total = sum(s.value for s in body.round_scores)
+        user_message = (
+            f"Round complete! The three darts scored: {scores_text}. "
+            f"Round total: {total}. Give an enthusiastic round summary."
+        )
+    else:
+        user_message = f"Dart scored: {body.score_label} for {body.score_value} points."
+
+    try:
+        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+
+        ws = runtime.ws
+        # gpt-oss-120b uses reasoning tokens from the budget, so give it more room
+        token_limit = 256 if body.model.value == "gpt-oss-120b" else 60
+
+        response = ws.serving_endpoints.query(
+            name=endpoint_name,
+            messages=[
+                ChatMessage(role=ChatMessageRole.SYSTEM, content=_COMMENTARY_SYSTEM_PROMPT),
+                ChatMessage(role=ChatMessageRole.USER, content=user_message),
+            ],
+            max_tokens=token_limit,
+        )
+
+        text = ""
+        if response.choices:
+            choice = response.choices[0]
+            msg = getattr(choice, "message", None)
+            content = getattr(msg, "content", None) if msg else None
+
+            # Some models (e.g. gpt-oss-120b) return content as a list of
+            # typed blocks: [{"type": "reasoning", ...}, {"type": "text", "text": "..."}]
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                text = " ".join(parts).strip()
+            else:
+                text = str(content).strip() if content else ""
+
+        if not text:
+            text = f"{body.score_label} — {body.score_value} points!"
+
+        _logger.info(f"[commentary] model={body.model.value} score={body.score_label} -> {text}")
+        return CommentaryOut(commentary=text, model=body.model.value)
+
+    except Exception as exc:
+        _logger.error(f"[commentary] Error from {endpoint_name}: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Commentary generation failed: {exc}",
+        )
 
 
 # ── Detection ────────────────────────────────────────────────────────────────

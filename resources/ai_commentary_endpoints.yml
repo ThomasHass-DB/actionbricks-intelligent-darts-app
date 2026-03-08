@@ -1,0 +1,81 @@
+resources:
+  model_serving_endpoints:
+    ai-gateway-gemini:
+      name: "intelligent_darts_databricks-gemini-2-5-flash"
+      config:
+        served_entities:
+          - name: "databricks-gemini-2-5-flash"
+            external_model:
+              name: "databricks-gemini-2-5-flash"
+              provider: "databricks-model-serving"
+              task: "llm/v1/chat"
+              databricks_model_serving_config:
+                databricks_workspace_url: ${var.workspace_url}
+                databricks_api_token: ${var.databricks_api_token_secret}
+      ai_gateway:
+        inference_table_config:
+          catalog_name: ${var.catalog}
+          schema_name: ${var.schema}
+          enabled: true
+        usage_tracking_config:
+          enabled: true
+
+    ai-gateway-llama:
+      name: "intelligent_darts_databricks-llama-4-maverick"
+      config:
+        served_entities:
+          - name: "databricks-llama-4-maverick"
+            external_model:
+              name: "databricks-llama-4-maverick"
+              provider: "databricks-model-serving"
+              task: "llm/v1/chat"
+              databricks_model_serving_config:
+                databricks_workspace_url: ${var.workspace_url}
+                databricks_api_token: ${var.databricks_api_token_secret}
+      ai_gateway:
+        inference_table_config:
+          catalog_name: ${var.catalog}
+          schema_name: ${var.schema}
+          enabled: true
+        usage_tracking_config:
+          enabled: true
+
+    ai-gateway-gpt-oss:
+      name: "intelligent_darts_databricks-gpt-oss-120b"
+      config:
+        served_entities:
+          - name: "databricks-gpt-oss-120b"
+            external_model:
+              name: "databricks-gpt-oss-120b"
+              provider: "databricks-model-serving"
+              task: "llm/v1/chat"
+              databricks_model_serving_config:
+                databricks_workspace_url: ${var.workspace_url}
+                databricks_api_token: ${var.databricks_api_token_secret}
+      ai_gateway:
+        inference_table_config:
+          catalog_name: ${var.catalog}
+          schema_name: ${var.schema}
+          enabled: true
+        usage_tracking_config:
+          enabled: true
+
+    ai-gateway-claude:
+      name: "intelligent_darts_databricks-claude-3-7-sonnet"
+      config:
+        served_entities:
+          - name: "databricks-claude-3-7-sonnet"
+            external_model:
+              name: "databricks-claude-3-7-sonnet"
+              provider: "databricks-model-serving"
+              task: "llm/v1/chat"
+              databricks_model_serving_config:
+                databricks_workspace_url: ${var.workspace_url}
+                databricks_api_token: ${var.databricks_api_token_secret}
+      ai_gateway:
+        inference_table_config:
+          catalog_name: ${var.catalog}
+          schema_name: ${var.schema}
+          enabled: true
+        usage_tracking_config:
+          enabled: true
