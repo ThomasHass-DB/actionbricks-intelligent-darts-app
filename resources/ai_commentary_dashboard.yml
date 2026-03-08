@@ -1,0 +1,7 @@
+resources:
+  dashboards:
+    ai-commentary-performance:
+      display_name: "AI Commentary Model Performance"
+      file_path: ../resources/ai_commentary_dashboard.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      embed_credentials: true

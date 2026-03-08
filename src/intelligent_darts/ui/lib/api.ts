@@ -80,6 +80,27 @@ export interface CameraSettingsOut {
   service_credential_name: string;
 }
 
+export interface CommentaryIn {
+  model: CommentaryModel;
+  round_scores?: RoundScoreIn[] | null;
+  score_label: string;
+  score_value: number;
+}
+
+export const CommentaryModel = {
+  "gemini-2-5-flash": "gemini-2-5-flash",
+  "llama-4-maverick": "llama-4-maverick",
+  "gpt-oss-120b": "gpt-oss-120b",
+  "claude-3-7-sonnet": "claude-3-7-sonnet",
+} as const;
+
+export type CommentaryModel = (typeof CommentaryModel)[keyof typeof CommentaryModel];
+
+export interface CommentaryOut {
+  commentary: string;
+  model: string;
+}
+
 export interface ComplexValue {
   display?: string | null;
   primary?: boolean | null;
@@ -182,6 +203,11 @@ export interface RawCaptureGroupOut {
 export interface RawCaptureListOut {
   captures: RawCaptureGroupOut[];
   total: number;
+}
+
+export interface RoundScoreIn {
+  label: string;
+  value: number;
 }
 
 export interface SaveLabelsIn {
@@ -400,6 +426,21 @@ export const updateCameraSettings = async (data: CameraSettingsIn, options?: Req
 
 export function useUpdateCameraSettings(options?: { mutation?: UseMutationOptions<{ data: CameraSettingsOut }, ApiError, CameraSettingsIn> }) {
   return useMutation({ mutationFn: (data) => updateCameraSettings(data), ...options?.mutation });
+}
+
+export const generateCommentary = async (data: CommentaryIn, options?: RequestInit): Promise<{ data: CommentaryOut }> => {
+  const res = await fetch("/api/commentary", { ...options, method: "POST", headers: { "Content-Type": "application/json", ...options?.headers }, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+    throw new ApiError(res.status, res.statusText, parsed);
+  }
+  return { data: await res.json() };
+};
+
+export function useGenerateCommentary(options?: { mutation?: UseMutationOptions<{ data: CommentaryOut }, ApiError, CommentaryIn> }) {
+  return useMutation({ mutationFn: (data) => generateCommentary(data), ...options?.mutation });
 }
 
 export const currentUser = async (params?: CurrentUserParams, options?: RequestInit): Promise<{ data: User }> => {
